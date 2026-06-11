@@ -1,6 +1,7 @@
 (function () {
   const root = document.documentElement;
-  const storedTheme = window.localStorage.getItem('pfl-theme');
+  window.localStorage.removeItem('pfl-theme');
+  const storedTheme = window.localStorage.getItem('sit-theme');
 
   if (storedTheme === 'light' || storedTheme === 'dark') {
     root.setAttribute('data-theme', storedTheme);
@@ -20,7 +21,7 @@
     if (themeButton) {
       const nextTheme = (root.getAttribute('data-theme') || 'dark') === 'dark' ? 'light' : 'dark';
       root.setAttribute('data-theme', nextTheme);
-      window.localStorage.setItem('pfl-theme', nextTheme);
+      window.localStorage.setItem('sit-theme', nextTheme);
       refreshThemeButton();
     }
 

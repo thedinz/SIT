@@ -44,6 +44,7 @@ const allowedLogoTypes = new Map([
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.disable('x-powered-by');
+app.set('etag', false);
 
 app.use(
   helmet({
@@ -66,7 +67,7 @@ app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: '7d' }));
 app.use(
   cookieSession({
-    name: 'pfl_session',
+    name: 'sit_session',
     keys: [process.env.SESSION_SECRET || getSetting('session_secret')],
     maxAge: 30 * 24 * 60 * 60 * 1000,
     httpOnly: true,
@@ -74,6 +75,13 @@ app.use(
     secure: process.env.COOKIE_SECURE === 'true'
   })
 );
+
+app.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    res.set('Cache-Control', 'no-store');
+  }
+  next();
+});
 
 function normalizeFilename(filename) {
   return path.basename(filename || '').replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -331,6 +339,7 @@ function renderIssueForm(res, options) {
 
 app.use((req, res, next) => {
   res.locals.appName = APP_NAME;
+  res.locals.assetVersion = '20260611-3';
   res.locals.isAuthenticated = Boolean(req.session.authenticated);
   res.locals.currentPath = req.path;
   res.locals.flash = consumeFlash(req);
@@ -358,6 +367,7 @@ app.post('/login', (req, res) => {
   const passwordHash = getSetting('password_hash');
 
   if (bcrypt.compareSync(password, passwordHash)) {
+    console.info(`Shared login succeeded from ${req.ip}`);
     req.session.authenticated = true;
     req.session.theme = getSetting('theme', 'dark');
     setFlash(req, 'success', 'You are logged in.');
@@ -365,6 +375,7 @@ app.post('/login', (req, res) => {
     return;
   }
 
+  console.info(`Shared login failed from ${req.ip}`);
   setFlash(req, 'error', 'The password was not correct.');
   res.redirect('/login');
 });

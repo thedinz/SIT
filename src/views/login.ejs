@@ -1,13 +1,33 @@
 <%- include('partials/top', { title: 'Login', bodyClass: 'login-page' }) %>
 
-<section class="login-card">
-  <div class="login-mark">SIT</div>
-  <h1><%= appName %></h1>
-  <form method="post" action="/login" class="stack">
-    <label for="password">Password</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
-    <button class="primary-button" type="submit">Enter Log</button>
+<section class="login-card" aria-labelledby="login-title">
+  <div class="login-brand-block">
+    <div class="login-mark">SIT</div>
+    <div>
+      <p class="eyebrow">Shared access</p>
+      <h1 id="login-title"><%= appName %></h1>
+    </div>
+  </div>
+
+  <form method="post" action="/login" class="stack login-form" data-login-form>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
+    </div>
+    <input class="primary-button login-submit" type="submit" value="Enter Log">
   </form>
+
+  <div class="login-preview" aria-hidden="true">
+    <div class="preview-topline"></div>
+    <div class="preview-row">
+      <span></span>
+      <strong></strong>
+    </div>
+    <div class="preview-columns">
+      <span></span>
+      <span></span>
+    </div>
+  </div>
 </section>
 
 <%- include('partials/bottom') %>

@@ -21,6 +21,14 @@ docker compose up -d
 
 Open [http://localhost:8080](http://localhost:8080).
 
+If you are testing the current development branch:
+
+```bash
+git clone -b dev https://github.com/thedinz/SIT.git sit
+cd sit
+docker compose up -d
+```
+
 Default password:
 
 ```text

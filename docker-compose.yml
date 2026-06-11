@@ -1,7 +1,7 @@
 services:
-  production-fix-log:
+  simple-issue-tracker:
     build: .
-    container_name: production-fix-log
+    container_name: simple-issue-tracker
     restart: unless-stopped
     ports:
       - "8080:3000"

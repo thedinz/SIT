@@ -1,5 +1,5 @@
 {
-  "name": "production-fix-log",
+  "name": "simple-issue-tracker",
   "version": "1.0.0",
   "description": "A simple self-hosted issue-and-resolution log for church production teams.",
   "main": "src/server.js",

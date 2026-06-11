@@ -9,7 +9,7 @@ const DATA_DIR = process.env.DATA_DIR || path.join(ROOT_DIR, 'data');
 const DB_DIR = path.join(DATA_DIR, 'db');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 const LOGO_DIR = path.join(DATA_DIR, 'logo');
-const DB_PATH = process.env.DB_PATH || path.join(DB_DIR, 'production_fix_log.sqlite');
+const DB_PATH = process.env.DB_PATH || path.join(DB_DIR, 'simple_issue_tracker.sqlite');
 
 for (const dir of [DB_DIR, UPLOAD_DIR, LOGO_DIR]) {
   fs.mkdirSync(dir, { recursive: true });

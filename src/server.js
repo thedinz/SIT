@@ -24,7 +24,7 @@ const { sanitizeEditorHtml, textFromHtml } = require('./sanitize');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
-const APP_NAME = 'Production Fix Log';
+const APP_NAME = 'Simple Issue Tracker';
 const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 const MAX_LOGO_SIZE = 3 * 1024 * 1024;
 const allowedAttachmentTypes = new Map([

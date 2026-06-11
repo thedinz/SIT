@@ -1,4 +1,4 @@
-# Production Fix Log
+# Simple Issue Tracker
 
 A simple self-hosted issue-and-resolution log for church production teams. It is intentionally not a helpdesk or ticketing system: volunteers can quickly record a production issue, leave the resolution blank, and update the entry after the fix is known.
 
@@ -41,26 +41,48 @@ Docker Compose stores app data in local folders:
 
 The app container uses `/data/db`, `/data/uploads`, and `/data/logo` internally.
 
+## Docker Compose Example
+
+Use this `docker-compose.yml` as-is, or adjust the host port and storage paths for your server:
+
+```yaml
+services:
+  simple-issue-tracker:
+    build: .
+    container_name: simple-issue-tracker
+    restart: unless-stopped
+    ports:
+      - "8080:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATA_DIR: /data
+    volumes:
+      - ./storage/db:/data/db
+      - ./storage/uploads:/data/uploads
+      - ./storage/logo:/data/logo
+```
+
 ## Backups
 
 To back up the app, back up the whole `storage` folder:
 
 ```bash
-tar -czf production-fix-log-backup.tgz storage
+tar -czf simple-issue-tracker-backup.tgz storage
 ```
 
 That includes the SQLite database, uploaded attachments, and logo. To restore, stop the container, replace the `storage` folder, then start it again.
 
 ```bash
 docker compose down
-tar -xzf production-fix-log-backup.tgz
+tar -xzf simple-issue-tracker-backup.tgz
 docker compose up -d
 ```
 
 For a live SQLite backup, you can also run:
 
 ```bash
-sqlite3 storage/db/production_fix_log.sqlite ".backup 'production_fix_log_backup.sqlite'"
+sqlite3 storage/db/simple_issue_tracker.sqlite ".backup 'simple_issue_tracker_backup.sqlite'"
 ```
 
 ## Configuration

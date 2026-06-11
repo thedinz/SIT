@@ -9,7 +9,7 @@
     </div>
   </div>
 
-  <form method="post" action="/login" class="stack login-form" data-login-form>
+  <form method="post" action="<%= urlFor('/login') %>" class="stack login-form" data-login-form>
     <div class="field">
       <label for="password">Password</label>
       <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>

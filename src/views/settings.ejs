@@ -15,7 +15,7 @@
     <% } else { %>
       <p class="muted">No logo uploaded.</p>
     <% } %>
-    <form class="stack" method="post" action="/settings/logo" enctype="multipart/form-data">
+    <form class="stack" method="post" action="<%= urlFor('/settings/logo') %>" enctype="multipart/form-data">
       <div class="field">
         <label for="logo">Logo image</label>
         <input id="logo" name="logo" type="file" accept="image/jpeg,image/png,image/gif,image/webp" required>
@@ -26,7 +26,7 @@
 
   <section class="settings-card">
     <h2>Theme</h2>
-    <form class="stack" method="post" action="/settings/theme">
+    <form class="stack" method="post" action="<%= urlFor('/settings/theme') %>">
       <div class="field">
         <label for="theme">Default theme</label>
         <select id="theme" name="theme">
@@ -40,7 +40,7 @@
 
   <section class="settings-card wide-card">
     <h2>Departments</h2>
-    <form class="add-row" method="post" action="/settings/departments">
+    <form class="add-row" method="post" action="<%= urlFor('/settings/departments') %>">
       <div class="field">
         <label for="department-name">Add department</label>
         <input id="department-name" name="name" type="text" maxlength="80" required>
@@ -51,11 +51,11 @@
     <div class="department-list">
       <% departments.forEach((department) => { %>
         <div class="department-row">
-          <form method="post" action="/settings/departments/<%= department.id %>">
+          <form method="post" action="<%= urlFor(`/settings/departments/${department.id}`) %>">
             <input name="name" type="text" value="<%= department.name %>" maxlength="80" required>
             <button class="ghost-button compact" type="submit">Rename</button>
           </form>
-          <form method="post" action="/settings/departments/<%= department.id %>/delete" data-confirm="Delete this department?">
+          <form method="post" action="<%= urlFor(`/settings/departments/${department.id}/delete`) %>" data-confirm="Delete this department?">
             <span class="usage-count"><%= department.issue_count %> used</span>
             <button class="danger-button compact" type="submit" <%= department.issue_count > 0 ? 'disabled' : '' %>>Delete</button>
           </form>
@@ -66,7 +66,7 @@
 
   <section class="settings-card">
     <h2>Password</h2>
-    <form class="stack" method="post" action="/settings/password">
+    <form class="stack" method="post" action="<%= urlFor('/settings/password') %>">
       <div class="field">
         <label for="password">New password</label>
         <input id="password" name="password" type="password" autocomplete="new-password" required>

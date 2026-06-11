@@ -8,10 +8,10 @@
       <p class="meta-line">Submitted <%= formatDate(issue.created_at) %> · Updated <%= formatDate(issue.updated_at) %></p>
     <% } %>
   </div>
-  <a class="ghost-button compact" href="/">Back</a>
+  <a class="ghost-button compact" href="<%= urlFor('/') %>">Back</a>
 </section>
 
-<form class="form-card stack" method="post" action="<%= action %>" enctype="multipart/form-data" data-editor-form>
+<form class="form-card stack" method="post" action="<%= urlFor(action) %>" enctype="multipart/form-data" data-editor-form>
   <div class="field">
     <label for="department_id">Department</label>
     <select id="department_id" name="department_id" required>
@@ -49,7 +49,7 @@
         <% attachments.forEach((attachment) => { %>
           <label class="attachment-card">
             <% if (attachment.mime_type.startsWith('image/')) { %>
-              <img src="/uploads/<%= attachment.filename %>" alt="">
+              <img src="<%= urlFor(`/uploads/${attachment.filename}`) %>" alt="">
             <% } else { %>
               <span class="pdf-icon">PDF</span>
             <% } %>
@@ -71,7 +71,7 @@
 
   <div class="form-actions">
     <button class="primary-button" type="submit"><%= mode === 'create' ? 'Submit Issue' : 'Save Changes' %></button>
-    <a class="ghost-button" href="/">Cancel</a>
+    <a class="ghost-button" href="<%= urlFor('/') %>">Cancel</a>
   </div>
 </form>
 

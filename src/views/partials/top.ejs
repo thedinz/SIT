@@ -4,13 +4,13 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title><%= typeof title !== 'undefined' && title ? `${title} | ${appName}` : appName %></title>
-    <link rel="stylesheet" href="/css/styles.css?v=<%= assetVersion %>">
-    <script defer src="/js/app.js?v=<%= assetVersion %>"></script>
+    <link rel="stylesheet" href="<%= urlFor(`/css/styles.css?v=${assetVersion}`) %>">
+    <script defer src="<%= urlFor(`/js/app.js?v=${assetVersion}`) %>"></script>
   </head>
   <body class="<%= typeof bodyClass !== 'undefined' ? bodyClass : '' %>">
     <% if (isAuthenticated) { %>
       <header class="app-header">
-        <a class="brand" href="/" aria-label="<%= appName %> dashboard">
+        <a class="brand" href="<%= urlFor('/') %>" aria-label="<%= appName %> dashboard">
           <% if (logoUrl) { %>
             <img class="brand-logo" src="<%= logoUrl %>" alt="<%= appName %> logo">
             <span class="brand-title"><%= appName %></span>
@@ -19,11 +19,11 @@
           <% } %>
         </a>
         <nav class="nav-links" aria-label="Primary navigation">
-          <a class="<%= currentPath === '/' ? 'active' : '' %>" href="/">Dashboard</a>
-          <a class="<%= currentPath === '/issues/new' ? 'active' : '' %>" href="/issues/new">Add Issue</a>
-          <a class="<%= currentPath === '/settings' ? 'active' : '' %>" href="/settings">Settings</a>
+          <a class="<%= currentPath === '/' ? 'active' : '' %>" href="<%= urlFor('/') %>">Dashboard</a>
+          <a class="<%= currentPath === '/issues/new' ? 'active' : '' %>" href="<%= urlFor('/issues/new') %>">Add Issue</a>
+          <a class="<%= currentPath === '/settings' ? 'active' : '' %>" href="<%= urlFor('/settings') %>">Settings</a>
           <button class="theme-toggle" type="button" data-theme-toggle aria-label="Toggle theme">Theme</button>
-          <a class="logout-link" href="/logout">Logout</a>
+          <a class="logout-link" href="<%= urlFor('/logout') %>">Logout</a>
         </nav>
       </header>
     <% } %>

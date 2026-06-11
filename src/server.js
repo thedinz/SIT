@@ -49,14 +49,19 @@ app.set('etag', false);
 app.use(
   helmet({
     contentSecurityPolicy: {
+      useDefaults: false,
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
         styleSrc: ["'self'"],
         imgSrc: ["'self'", 'data:'],
+        fontSrc: ["'self'", 'data:'],
+        connectSrc: ["'self'"],
         objectSrc: ["'none'"],
         baseUri: ["'self'"],
-        formAction: ["'self'"]
+        formAction: ["'self'"],
+        frameAncestors: ["'self'"],
+        scriptSrcAttr: ["'none'"]
       }
     }
   })
@@ -136,6 +141,36 @@ function setFlash(req, type, message) {
   req.session.flash = { type, message };
 }
 
+function pathDepth(requestPath) {
+  const pathname = String(requestPath || '/').split('?')[0];
+  if (pathname === '/' || pathname === '') {
+    return 0;
+  }
+
+  const segments = pathname.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
+  if (segments.length === 0) {
+    return 0;
+  }
+  return pathname.endsWith('/') ? segments.length : Math.max(0, segments.length - 1);
+}
+
+function urlFor(req, target = '/') {
+  const value = String(target || '/');
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith('//') || value.startsWith('#')) {
+    return value;
+  }
+
+  const prefix = '../'.repeat(pathDepth(req.path));
+  if (value === '/' || value === '') {
+    return prefix || './';
+  }
+  return `${prefix}${value.replace(/^\/+/, '')}`;
+}
+
+function redirectTo(req, res, target) {
+  res.redirect(urlFor(req, target));
+}
+
 function consumeFlash(req) {
   const flash = req.session.flash;
   delete req.session.flash;
@@ -147,7 +182,7 @@ function requireAuth(req, res, next) {
     next();
     return;
   }
-  res.redirect('/login');
+  redirectTo(req, res, '/login');
 }
 
 function formatDate(value) {
@@ -324,7 +359,7 @@ function uploadMiddleware(middleware, failureRedirect = 'back') {
           ? 'The uploaded file is too large or too many files were selected.'
           : error.message || 'The upload could not be processed.';
       setFlash(req, 'error', message);
-      res.redirect(failureRedirect === 'back' ? req.get('referer') || '/' : failureRedirect);
+      res.redirect(failureRedirect === 'back' ? req.get('referer') || urlFor(req, '/') : urlFor(req, failureRedirect));
     });
   };
 }
@@ -339,14 +374,15 @@ function renderIssueForm(res, options) {
 
 app.use((req, res, next) => {
   res.locals.appName = APP_NAME;
-  res.locals.assetVersion = '20260611-3';
+  res.locals.assetVersion = '20260611-4';
+  res.locals.urlFor = (target) => urlFor(req, target);
   res.locals.isAuthenticated = Boolean(req.session.authenticated);
   res.locals.currentPath = req.path;
   res.locals.flash = consumeFlash(req);
   res.locals.formatDate = formatDate;
   res.locals.theme = req.session.theme || getSetting('theme', 'dark');
   const logoFilename = getSetting('logo_filename');
-  res.locals.logoUrl = logoFilename ? `/logo/${encodeURIComponent(logoFilename)}` : '';
+  res.locals.logoUrl = logoFilename ? urlFor(req, `/logo/${encodeURIComponent(logoFilename)}`) : '';
   next();
 });
 
@@ -356,7 +392,7 @@ app.get('/healthz', (_req, res) => {
 
 app.get('/login', (req, res) => {
   if (req.session.authenticated) {
-    res.redirect('/');
+    redirectTo(req, res, '/');
     return;
   }
   res.render('login', { appName: APP_NAME });
@@ -371,18 +407,18 @@ app.post('/login', (req, res) => {
     req.session.authenticated = true;
     req.session.theme = getSetting('theme', 'dark');
     setFlash(req, 'success', 'You are logged in.');
-    res.redirect('/');
+    redirectTo(req, res, '/');
     return;
   }
 
   console.info(`Shared login failed from ${req.ip}`);
   setFlash(req, 'error', 'The password was not correct.');
-  res.redirect('/login');
+  redirectTo(req, res, '/login');
 });
 
 app.get('/logout', (req, res) => {
   req.session = null;
-  res.redirect('/login');
+  redirectTo(req, res, '/login');
 });
 
 app.use(requireAuth);
@@ -444,7 +480,7 @@ app.get('/', (req, res) => {
     if (pageSize !== 10) query.set('pageSize', String(pageSize));
     if (targetPage > 1) query.set('page', String(targetPage));
     const queryString = query.toString();
-    return queryString ? `/?${queryString}` : '/';
+    return urlFor(req, queryString ? `/?${queryString}` : '/');
   };
 
   res.render('dashboard', {
@@ -490,14 +526,14 @@ app.post('/issues', uploadMiddleware(attachmentUpload.array('attachments', 12), 
   if (!Number.isInteger(departmentId) || !db.prepare('SELECT 1 FROM departments WHERE id = ?').get(departmentId)) {
     removeUploadedFiles(req.files);
     setFlash(req, 'error', 'Choose a department before saving.');
-    res.redirect('/issues/new');
+    redirectTo(req, res, '/issues/new');
     return;
   }
 
   if (!textFromHtml(issueHtml)) {
     removeUploadedFiles(req.files);
     setFlash(req, 'error', 'Add the issue details before saving.');
-    res.redirect('/issues/new');
+    redirectTo(req, res, '/issues/new');
     return;
   }
 
@@ -511,14 +547,14 @@ app.post('/issues', uploadMiddleware(attachmentUpload.array('attachments', 12), 
 
   insertAttachments(result.lastInsertRowid, req.files);
   setFlash(req, 'success', 'Issue added.');
-  res.redirect('/');
+  redirectTo(req, res, '/');
 });
 
 app.get('/issues/:id/edit', (req, res) => {
   const issue = getIssue(Number(req.params.id));
   if (!issue) {
     setFlash(req, 'error', 'That issue could not be found.');
-    res.redirect('/');
+    redirectTo(req, res, '/');
     return;
   }
 
@@ -538,7 +574,7 @@ app.post('/issues/:id', uploadMiddleware(attachmentUpload.array('attachments', 1
 
   if (!existingIssue) {
     setFlash(req, 'error', 'That issue could not be found.');
-    res.redirect('/');
+    redirectTo(req, res, '/');
     return;
   }
 
@@ -549,14 +585,14 @@ app.post('/issues/:id', uploadMiddleware(attachmentUpload.array('attachments', 1
   if (!Number.isInteger(departmentId) || !db.prepare('SELECT 1 FROM departments WHERE id = ?').get(departmentId)) {
     removeUploadedFiles(req.files);
     setFlash(req, 'error', 'Choose a department before saving.');
-    res.redirect(`/issues/${issueId}/edit`);
+    redirectTo(req, res, `/issues/${issueId}/edit`);
     return;
   }
 
   if (!textFromHtml(issueHtml)) {
     removeUploadedFiles(req.files);
     setFlash(req, 'error', 'Add the issue details before saving.');
-    res.redirect(`/issues/${issueId}/edit`);
+    redirectTo(req, res, `/issues/${issueId}/edit`);
     return;
   }
 
@@ -569,7 +605,7 @@ app.post('/issues/:id', uploadMiddleware(attachmentUpload.array('attachments', 1
   insertAttachments(issueId, req.files);
 
   setFlash(req, 'success', 'Issue updated.');
-  res.redirect('/');
+  redirectTo(req, res, '/');
 });
 
 app.get('/uploads/:filename', (req, res) => {
@@ -605,7 +641,7 @@ app.get('/settings', (_req, res) => {
 app.post('/settings/logo', uploadMiddleware(logoUpload.single('logo'), '/settings'), (req, res) => {
   if (!req.file) {
     setFlash(req, 'error', 'Choose a logo image to upload.');
-    res.redirect('/settings');
+    redirectTo(req, res, '/settings');
     return;
   }
 
@@ -617,7 +653,7 @@ app.post('/settings/logo', uploadMiddleware(logoUpload.single('logo'), '/setting
   }
 
   setFlash(req, 'success', 'Logo updated.');
-  res.redirect('/settings');
+  redirectTo(req, res, '/settings');
 });
 
 app.post('/settings/theme', (req, res) => {
@@ -625,14 +661,14 @@ app.post('/settings/theme', (req, res) => {
   setSetting('theme', theme);
   req.session.theme = theme;
   setFlash(req, 'success', 'Theme preference saved.');
-  res.redirect('/settings');
+  redirectTo(req, res, '/settings');
 });
 
 app.post('/settings/departments', (req, res) => {
   const name = String(req.body.name || '').trim().slice(0, 80);
   if (!name) {
     setFlash(req, 'error', 'Department name is required.');
-    res.redirect('/settings');
+    redirectTo(req, res, '/settings');
     return;
   }
 
@@ -643,7 +679,7 @@ app.post('/settings/departments', (req, res) => {
   } catch (_error) {
     setFlash(req, 'error', 'That department already exists.');
   }
-  res.redirect('/settings');
+  redirectTo(req, res, '/settings');
 });
 
 app.post('/settings/departments/:id', (req, res) => {
@@ -651,7 +687,7 @@ app.post('/settings/departments/:id', (req, res) => {
   const name = String(req.body.name || '').trim().slice(0, 80);
   if (!name) {
     setFlash(req, 'error', 'Department name is required.');
-    res.redirect('/settings');
+    redirectTo(req, res, '/settings');
     return;
   }
 
@@ -661,7 +697,7 @@ app.post('/settings/departments/:id', (req, res) => {
   } catch (_error) {
     setFlash(req, 'error', 'That department name is already in use.');
   }
-  res.redirect('/settings');
+  redirectTo(req, res, '/settings');
 });
 
 app.post('/settings/departments/:id/delete', (req, res) => {
@@ -669,13 +705,13 @@ app.post('/settings/departments/:id/delete', (req, res) => {
   const used = db.prepare('SELECT COUNT(*) AS count FROM issues WHERE department_id = ?').get(id).count;
   if (used > 0) {
     setFlash(req, 'error', 'That department is used by existing issues, so it cannot be deleted.');
-    res.redirect('/settings');
+    redirectTo(req, res, '/settings');
     return;
   }
 
   db.prepare('DELETE FROM departments WHERE id = ?').run(id);
   setFlash(req, 'success', 'Department deleted.');
-  res.redirect('/settings');
+  redirectTo(req, res, '/settings');
 });
 
 app.post('/settings/password', (req, res) => {
@@ -684,19 +720,19 @@ app.post('/settings/password', (req, res) => {
 
   if (password.length < 4) {
     setFlash(req, 'error', 'Use at least 4 characters for the shared password.');
-    res.redirect('/settings');
+    redirectTo(req, res, '/settings');
     return;
   }
 
   if (password !== confirmPassword) {
     setFlash(req, 'error', 'The new passwords did not match.');
-    res.redirect('/settings');
+    redirectTo(req, res, '/settings');
     return;
   }
 
   setSetting('password_hash', bcrypt.hashSync(password, 12));
   setFlash(req, 'success', 'Password updated.');
-  res.redirect('/settings');
+  redirectTo(req, res, '/settings');
 });
 
 app.use((_req, res) => {

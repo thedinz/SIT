@@ -2,10 +2,14 @@
 
 <section class="login-card" aria-labelledby="login-title">
   <div class="login-brand-block">
-    <div class="login-mark">SIT</div>
+    <% if (logoUrl) { %>
+      <img class="login-logo" src="<%= logoUrl %>" alt="<%= displayTitle %> logo">
+    <% } else { %>
+      <div class="login-mark">SIT</div>
+    <% } %>
     <div>
       <p class="eyebrow">Shared access</p>
-      <h1 id="login-title"><%= appName %></h1>
+      <h1 id="login-title"><%= displayTitle %></h1>
     </div>
   </div>
 

@@ -79,6 +79,10 @@ function seedDefaults() {
     setSetting('theme', 'dark');
   }
 
+  if (!getSetting('display_title')) {
+    setSetting('display_title', 'Simple Issue Tracker');
+  }
+
   const count = db.prepare('SELECT COUNT(*) AS count FROM departments').get().count;
   if (count === 0) {
     const timestamp = nowIso();

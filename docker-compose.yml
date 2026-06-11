@@ -1,6 +1,6 @@
 services:
   simple-issue-tracker:
-    build: .
+    image: ghcr.io/thedinz/sit:latest
     container_name: simple-issue-tracker
     restart: unless-stopped
     ports:

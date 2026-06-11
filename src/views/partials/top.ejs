@@ -3,19 +3,19 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title><%= typeof title !== 'undefined' && title ? `${title} | ${appName}` : appName %></title>
+    <title><%= typeof title !== 'undefined' && title ? `${title} | ${displayTitle}` : displayTitle %></title>
     <link rel="stylesheet" href="<%= urlFor(`/css/styles.css?v=${assetVersion}`) %>">
     <script defer src="<%= urlFor(`/js/app.js?v=${assetVersion}`) %>"></script>
   </head>
   <body class="<%= typeof bodyClass !== 'undefined' ? bodyClass : '' %>">
     <% if (isAuthenticated) { %>
       <header class="app-header">
-        <a class="brand" href="<%= urlFor('/') %>" aria-label="<%= appName %> dashboard">
+        <a class="brand" href="<%= urlFor('/') %>" aria-label="<%= displayTitle %> dashboard">
           <% if (logoUrl) { %>
-            <img class="brand-logo" src="<%= logoUrl %>" alt="<%= appName %> logo">
-            <span class="brand-title"><%= appName %></span>
+            <img class="brand-logo" src="<%= logoUrl %>" alt="<%= displayTitle %> logo">
+            <span class="brand-title"><%= displayTitle %></span>
           <% } else { %>
-            <span class="brand-wordmark"><%= appName %></span>
+            <span class="brand-wordmark"><%= displayTitle %></span>
           <% } %>
         </a>
         <nav class="nav-links" aria-label="Primary navigation">

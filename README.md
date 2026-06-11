@@ -9,11 +9,34 @@ A simple self-hosted issue-and-resolution log for church production teams. It is
 - Search, department filter, sorting, page-size controls, and pagination
 - WYSIWYG issue and resolution editors with bold, italic, lists, and links
 - Screenshot/file attachments for images and PDFs
-- Settings for logo, departments, theme, and shared password
+- Settings for title, logo, departments, theme, and shared password
+- Footer with app version and branch metadata
 - SQLite database with first-run migrations and seeded departments
 - Docker Compose setup with persistent database, uploads, and logo storage
 
 ## Quick Start
+
+Create a `docker-compose.yml` file:
+
+```yaml
+services:
+  simple-issue-tracker:
+    image: ghcr.io/thedinz/sit:latest
+    container_name: simple-issue-tracker
+    restart: unless-stopped
+    ports:
+      - "8080:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATA_DIR: /data
+    volumes:
+      - ./storage/db:/data/db
+      - ./storage/uploads:/data/uploads
+      - ./storage/logo:/data/logo
+```
+
+Start it:
 
 ```bash
 docker compose up -d
@@ -21,12 +44,12 @@ docker compose up -d
 
 Open [http://localhost:8080](http://localhost:8080).
 
-If you are testing the current development branch:
+Image tags:
 
 ```bash
-git clone -b dev https://github.com/thedinz/SIT.git sit
-cd sit
-docker compose up -d
+docker pull ghcr.io/thedinz/sit:latest
+docker pull ghcr.io/thedinz/sit:main
+docker pull ghcr.io/thedinz/sit:dev
 ```
 
 Default password:
@@ -51,12 +74,12 @@ The app container uses `/data/db`, `/data/uploads`, and `/data/logo` internally.
 
 ## Docker Compose Example
 
-Use this `docker-compose.yml` as-is, or adjust the host port and storage paths for your server:
+Use this `docker-compose.yml` as-is, or adjust the host port and storage paths for your server. To test the development branch image, change `latest` to `dev`.
 
 ```yaml
 services:
   simple-issue-tracker:
-    build: .
+    image: ghcr.io/thedinz/sit:latest
     container_name: simple-issue-tracker
     restart: unless-stopped
     ports:
@@ -139,6 +162,12 @@ npm run dev
 ```
 
 The development app runs on [http://localhost:3000](http://localhost:3000) by default and stores data in `./data`.
+
+To build locally instead of using the published image:
+
+```bash
+docker build -t simple-issue-tracker:local .
+```
 
 ## One-Command Production Start
 

@@ -1,3 +1,11 @@
     </main>
+    <footer class="app-footer">
+      <span><%= appName %></span>
+      <span>v<%= appVersion %></span>
+      <span><%= appBranch %></span>
+      <% if (appCommit) { %>
+        <span><%= appCommit %></span>
+      <% } %>
+    </footer>
   </body>
 </html>

@@ -9,9 +9,20 @@
 
 <div class="settings-grid">
   <section class="settings-card">
+    <h2>Title</h2>
+    <form class="stack" method="post" action="<%= urlFor('/settings/title') %>">
+      <div class="field">
+        <label for="display_title">Display title</label>
+        <input id="display_title" name="display_title" type="text" value="<%= displayTitle %>" maxlength="80" required>
+      </div>
+      <button class="secondary-button" type="submit">Save Title</button>
+    </form>
+  </section>
+
+  <section class="settings-card">
     <h2>Logo</h2>
     <% if (logoUrl) { %>
-      <img class="logo-preview" src="<%= logoUrl %>" alt="<%= appName %> logo">
+      <img class="logo-preview" src="<%= logoUrl %>" alt="<%= displayTitle %> logo">
     <% } else { %>
       <p class="muted">No logo uploaded.</p>
     <% } %>

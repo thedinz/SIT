@@ -21,10 +21,14 @@ const {
   nowIso
 } = require('./db');
 const { sanitizeEditorHtml, textFromHtml } = require('./sanitize');
+const packageInfo = require('../package.json');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const APP_NAME = 'Simple Issue Tracker';
+const APP_VERSION = process.env.APP_VERSION || process.env.SIT_VERSION || packageInfo.version;
+const APP_BRANCH = process.env.APP_BRANCH || process.env.SIT_BRANCH || 'local';
+const APP_COMMIT = process.env.APP_COMMIT || process.env.SIT_COMMIT || '';
 const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 const MAX_LOGO_SIZE = 3 * 1024 * 1024;
 const allowedAttachmentTypes = new Map([
@@ -374,7 +378,11 @@ function renderIssueForm(res, options) {
 
 app.use((req, res, next) => {
   res.locals.appName = APP_NAME;
-  res.locals.assetVersion = '20260611-4';
+  res.locals.displayTitle = getSetting('display_title', APP_NAME);
+  res.locals.assetVersion = '20260611-5';
+  res.locals.appVersion = APP_VERSION;
+  res.locals.appBranch = APP_BRANCH;
+  res.locals.appCommit = APP_COMMIT ? APP_COMMIT.slice(0, 7) : '';
   res.locals.urlFor = (target) => urlFor(req, target);
   res.locals.isAuthenticated = Boolean(req.session.authenticated);
   res.locals.currentPath = req.path;
@@ -419,6 +427,16 @@ app.post('/login', (req, res) => {
 app.get('/logout', (req, res) => {
   req.session = null;
   redirectTo(req, res, '/login');
+});
+
+app.get('/logo/:filename', (req, res) => {
+  const configuredLogo = getSetting('logo_filename');
+  const filename = normalizeFilename(req.params.filename);
+  if (!configuredLogo || configuredLogo !== filename) {
+    res.status(404).send('Not found');
+    return;
+  }
+  res.sendFile(path.join(LOGO_DIR, filename));
 });
 
 app.use(requireAuth);
@@ -620,22 +638,26 @@ app.get('/uploads/:filename', (req, res) => {
   res.sendFile(path.join(UPLOAD_DIR, filename));
 });
 
-app.get('/logo/:filename', (req, res) => {
-  const configuredLogo = getSetting('logo_filename');
-  const filename = normalizeFilename(req.params.filename);
-  if (!configuredLogo || configuredLogo !== filename) {
-    res.status(404).send('Not found');
-    return;
-  }
-  res.sendFile(path.join(LOGO_DIR, filename));
-});
-
 app.get('/settings', (_req, res) => {
   res.render('settings', {
     appName: APP_NAME,
+    displayTitle: getSetting('display_title', APP_NAME),
     departments: getDepartmentsWithCounts(),
     currentTheme: getSetting('theme', 'dark')
   });
+});
+
+app.post('/settings/title', (req, res) => {
+  const displayTitle = String(req.body.display_title || '').trim().slice(0, 80);
+  if (!displayTitle) {
+    setFlash(req, 'error', 'Title is required.');
+    redirectTo(req, res, '/settings');
+    return;
+  }
+
+  setSetting('display_title', displayTitle);
+  setFlash(req, 'success', 'Title updated.');
+  redirectTo(req, res, '/settings');
 });
 
 app.post('/settings/logo', uploadMiddleware(logoUpload.single('logo'), '/settings'), (req, res) => {

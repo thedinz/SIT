@@ -1,0 +1,108 @@
+<%- include('partials/top', { title: 'Dashboard' }) %>
+
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Issue and resolution log</p>
+    <h1>Dashboard</h1>
+  </div>
+  <a class="primary-button compact" href="/issues/new">Add Issue</a>
+</section>
+
+<form class="control-bar" method="get" action="/">
+  <div class="field search-field">
+    <label for="q">Search</label>
+    <input id="q" name="q" type="search" value="<%= filters.q %>" placeholder="Search issues, resolutions, departments">
+  </div>
+  <div class="field">
+    <label for="department">Department</label>
+    <select id="department" name="department">
+      <option value="all">All Departments</option>
+      <% departments.forEach((department) => { %>
+        <option value="<%= department.id %>" <%= String(filters.department) === String(department.id) ? 'selected' : '' %>><%= department.name %></option>
+      <% }) %>
+    </select>
+  </div>
+  <div class="field">
+    <label for="sort">Sort</label>
+    <select id="sort" name="sort">
+      <option value="newest" <%= filters.sort === 'newest' ? 'selected' : '' %>>Newest first</option>
+      <option value="oldest" <%= filters.sort === 'oldest' ? 'selected' : '' %>>Oldest first</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="pageSize">Page size</label>
+    <select id="pageSize" name="pageSize">
+      <% [10, 25, 50].forEach((size) => { %>
+        <option value="<%= size %>" <%= filters.pageSize === size ? 'selected' : '' %>><%= size %></option>
+      <% }) %>
+    </select>
+  </div>
+  <div class="control-actions">
+    <button class="secondary-button" type="submit">Apply</button>
+    <a class="ghost-button" href="/">Clear</a>
+  </div>
+</form>
+
+<% if (issues.length === 0) { %>
+  <section class="empty-state">
+    <h2>No issues found</h2>
+    <p>When something needs to be recorded, add it here and the fix can be filled in later.</p>
+    <a class="primary-button compact" href="/issues/new">Add Issue</a>
+  </section>
+<% } else { %>
+  <section class="issue-list" aria-label="Issue log results">
+    <% issues.forEach((issue) => {
+      const attachments = attachmentsByIssue.get(issue.id) || [];
+    %>
+      <article class="issue-card">
+        <section class="date-cell">
+          <span class="date-text"><%= formatDate(issue.created_at) %></span>
+          <span class="department-pill"><%= issue.department_name %></span>
+          <% if (issue.updated_at !== issue.created_at) { %>
+            <span class="updated-text">Updated <%= formatDate(issue.updated_at) %></span>
+          <% } %>
+        </section>
+        <section class="log-cell issue-cell">
+          <h2>Issue</h2>
+          <div class="rich-text"><%- issue.issue_html %></div>
+          <% if (attachments.length > 0) { %>
+            <div class="attachment-strip" aria-label="Attachments">
+              <% attachments.forEach((attachment) => { %>
+                <a class="attachment-chip" href="/uploads/<%= attachment.filename %>" target="_blank" rel="noopener noreferrer">
+                  <% if (attachment.mime_type.startsWith('image/')) { %>
+                    <img src="/uploads/<%= attachment.filename %>" alt="">
+                  <% } %>
+                  <span><%= attachment.original_filename %></span>
+                </a>
+              <% }) %>
+            </div>
+          <% } %>
+        </section>
+        <section class="log-cell resolution-cell">
+          <h2>Resolution</h2>
+          <% if (issue.resolution_html && issue.resolution_html.trim()) { %>
+            <div class="rich-text"><%- issue.resolution_html %></div>
+          <% } else { %>
+            <p class="muted">No resolution added yet.</p>
+          <% } %>
+        </section>
+        <a class="edit-button" href="/issues/<%= issue.id %>/edit" aria-label="Edit issue <%= issue.id %>">Edit</a>
+      </article>
+    <% }) %>
+  </section>
+
+  <nav class="pagination" aria-label="Pagination">
+    <span><%= pagination.count %> total</span>
+    <div>
+      <% if (pagination.currentPage > 1) { %>
+        <a class="secondary-button compact" href="<%= pagination.pageUrl(pagination.currentPage - 1) %>">Previous</a>
+      <% } %>
+      <span>Page <%= pagination.currentPage %> of <%= pagination.totalPages %></span>
+      <% if (pagination.currentPage < pagination.totalPages) { %>
+        <a class="secondary-button compact" href="<%= pagination.pageUrl(pagination.currentPage + 1) %>">Next</a>
+      <% } %>
+    </div>
+  </nav>
+<% } %>
+
+<%- include('partials/bottom') %>

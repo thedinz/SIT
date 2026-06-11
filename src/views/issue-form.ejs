@@ -1,0 +1,78 @@
+<%- include('partials/top', { title }) %>
+
+<section class="page-heading">
+  <div>
+    <p class="eyebrow"><%= mode === 'create' ? 'New log entry' : `Entry #${issue.id}` %></p>
+    <h1><%= title %></h1>
+    <% if (mode === 'edit') { %>
+      <p class="meta-line">Submitted <%= formatDate(issue.created_at) %> · Updated <%= formatDate(issue.updated_at) %></p>
+    <% } %>
+  </div>
+  <a class="ghost-button compact" href="/">Back</a>
+</section>
+
+<form class="form-card stack" method="post" action="<%= action %>" enctype="multipart/form-data" data-editor-form>
+  <div class="field">
+    <label for="department_id">Department</label>
+    <select id="department_id" name="department_id" required>
+      <option value="">Choose department</option>
+      <% departments.forEach((department) => { %>
+        <option value="<%= department.id %>" <%= Number(issue.department_id) === Number(department.id) ? 'selected' : '' %>><%= department.name %></option>
+      <% }) %>
+    </select>
+  </div>
+
+  <div class="field">
+    <label>Issue</label>
+    <%- include('partials/editor', {
+      label: 'Issue',
+      name: 'issue_html',
+      value: issue.issue_html,
+      placeholder: 'Describe what happened'
+    }) %>
+  </div>
+
+  <div class="field">
+    <label>Resolution</label>
+    <%- include('partials/editor', {
+      label: 'Resolution',
+      name: 'resolution_html',
+      value: issue.resolution_html,
+      placeholder: 'Add the fix or leave blank'
+    }) %>
+  </div>
+
+  <% if (attachments.length > 0) { %>
+    <section class="existing-attachments">
+      <h2>Attachments</h2>
+      <div class="attachment-grid">
+        <% attachments.forEach((attachment) => { %>
+          <label class="attachment-card">
+            <% if (attachment.mime_type.startsWith('image/')) { %>
+              <img src="/uploads/<%= attachment.filename %>" alt="">
+            <% } else { %>
+              <span class="pdf-icon">PDF</span>
+            <% } %>
+            <span><%= attachment.original_filename %></span>
+            <span class="checkbox-line">
+              <input type="checkbox" name="delete_attachment_ids" value="<%= attachment.id %>" data-confirm-checkbox>
+              Delete
+            </span>
+          </label>
+        <% }) %>
+      </div>
+    </section>
+  <% } %>
+
+  <div class="field">
+    <label for="attachments">Add files</label>
+    <input id="attachments" name="attachments" type="file" multiple accept="image/jpeg,image/png,image/gif,image/webp,application/pdf">
+  </div>
+
+  <div class="form-actions">
+    <button class="primary-button" type="submit"><%= mode === 'create' ? 'Submit Issue' : 'Save Changes' %></button>
+    <a class="ghost-button" href="/">Cancel</a>
+  </div>
+</form>
+
+<%- include('partials/bottom') %>

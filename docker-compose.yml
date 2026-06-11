@@ -1,0 +1,15 @@
+services:
+  production-fix-log:
+    build: .
+    container_name: production-fix-log
+    restart: unless-stopped
+    ports:
+      - "8080:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATA_DIR: /data
+    volumes:
+      - ./storage/db:/data/db
+      - ./storage/uploads:/data/uploads
+      - ./storage/logo:/data/logo

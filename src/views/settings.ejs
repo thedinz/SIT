@@ -1,0 +1,83 @@
+<%- include('partials/top', { title: 'Settings' }) %>
+
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Shared app settings</p>
+    <h1>Settings</h1>
+  </div>
+</section>
+
+<div class="settings-grid">
+  <section class="settings-card">
+    <h2>Logo</h2>
+    <% if (logoUrl) { %>
+      <img class="logo-preview" src="<%= logoUrl %>" alt="<%= appName %> logo">
+    <% } else { %>
+      <p class="muted">No logo uploaded.</p>
+    <% } %>
+    <form class="stack" method="post" action="/settings/logo" enctype="multipart/form-data">
+      <div class="field">
+        <label for="logo">Logo image</label>
+        <input id="logo" name="logo" type="file" accept="image/jpeg,image/png,image/gif,image/webp" required>
+      </div>
+      <button class="secondary-button" type="submit">Upload Logo</button>
+    </form>
+  </section>
+
+  <section class="settings-card">
+    <h2>Theme</h2>
+    <form class="stack" method="post" action="/settings/theme">
+      <div class="field">
+        <label for="theme">Default theme</label>
+        <select id="theme" name="theme">
+          <option value="dark" <%= currentTheme === 'dark' ? 'selected' : '' %>>Dark</option>
+          <option value="light" <%= currentTheme === 'light' ? 'selected' : '' %>>Light</option>
+        </select>
+      </div>
+      <button class="secondary-button" type="submit">Save Theme</button>
+    </form>
+  </section>
+
+  <section class="settings-card wide-card">
+    <h2>Departments</h2>
+    <form class="add-row" method="post" action="/settings/departments">
+      <div class="field">
+        <label for="department-name">Add department</label>
+        <input id="department-name" name="name" type="text" maxlength="80" required>
+      </div>
+      <button class="secondary-button" type="submit">Add</button>
+    </form>
+
+    <div class="department-list">
+      <% departments.forEach((department) => { %>
+        <div class="department-row">
+          <form method="post" action="/settings/departments/<%= department.id %>">
+            <input name="name" type="text" value="<%= department.name %>" maxlength="80" required>
+            <button class="ghost-button compact" type="submit">Rename</button>
+          </form>
+          <form method="post" action="/settings/departments/<%= department.id %>/delete" data-confirm="Delete this department?">
+            <span class="usage-count"><%= department.issue_count %> used</span>
+            <button class="danger-button compact" type="submit" <%= department.issue_count > 0 ? 'disabled' : '' %>>Delete</button>
+          </form>
+        </div>
+      <% }) %>
+    </div>
+  </section>
+
+  <section class="settings-card">
+    <h2>Password</h2>
+    <form class="stack" method="post" action="/settings/password">
+      <div class="field">
+        <label for="password">New password</label>
+        <input id="password" name="password" type="password" autocomplete="new-password" required>
+      </div>
+      <div class="field">
+        <label for="confirm_password">Confirm password</label>
+        <input id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" required>
+      </div>
+      <button class="secondary-button" type="submit">Change Password</button>
+    </form>
+  </section>
+</div>
+
+<%- include('partials/bottom') %>

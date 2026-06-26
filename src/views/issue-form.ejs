@@ -13,14 +13,29 @@
 
 <form class="form-card stack" method="post" action="<%= urlFor(action) %>" enctype="multipart/form-data" data-editor-form>
   <div class="field">
-    <label for="department_id">Department</label>
-    <select id="department_id" name="department_id" required>
-      <option value="">Choose department</option>
-      <% departments.forEach((department) => { %>
-        <option value="<%= department.id %>" <%= Number(issue.department_id) === Number(department.id) ? 'selected' : '' %>><%= department.name %></option>
-      <% }) %>
+    <label for="poster_name">Name</label>
+    <input id="poster_name" name="poster_name" type="text" value="<%= issue.poster_name || '' %>" maxlength="120" autocomplete="name" required>
+  </div>
+
+  <div class="field">
+    <label for="status">Status</label>
+    <select id="status" name="status" required>
+      <option value="pending" <%= (issue.status || 'pending') === 'pending' ? 'selected' : '' %>>Pending</option>
+      <option value="resolved" <%= issue.status === 'resolved' ? 'selected' : '' %>>Resolved</option>
     </select>
   </div>
+
+  <fieldset class="checkbox-panel">
+    <legend>Departments</legend>
+    <div class="checkbox-grid">
+      <% departments.forEach((department) => { %>
+        <label class="checkbox-card">
+          <input type="checkbox" name="department_ids" value="<%= department.id %>" <%= (issue.department_ids || []).includes(department.id) ? 'checked' : '' %>>
+          <span><%= department.name %></span>
+        </label>
+      <% }) %>
+    </div>
+  </fieldset>
 
   <div class="field">
     <label>Issue</label>

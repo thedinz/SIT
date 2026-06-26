@@ -426,6 +426,13 @@ select {
   outline: none;
 }
 
+fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 input:focus,
 select:focus,
 .editor-surface:focus {
@@ -561,6 +568,40 @@ select:focus,
   font-weight: 850;
 }
 
+.department-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.submitted-by {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.status-pill {
+  display: inline-flex;
+  width: fit-content;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.status-pending {
+  border: 1px solid color-mix(in srgb, var(--warm) 56%, transparent);
+  color: var(--warm);
+  background: color-mix(in srgb, var(--warm) 12%, transparent);
+}
+
+.status-resolved {
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
 .updated-text {
   font-size: 0.8rem;
 }
@@ -676,6 +717,41 @@ select:focus,
 
 .form-card {
   padding: clamp(18px, 3vw, 28px);
+}
+
+.checkbox-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.checkbox-panel legend {
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.checkbox-card {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  background: var(--field-bg);
+}
+
+.checkbox-card input {
+  width: auto;
+  min-height: auto;
+  accent-color: var(--accent);
 }
 
 .editor {

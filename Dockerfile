@@ -2,7 +2,7 @@ FROM node:20-bookworm-slim
 
 WORKDIR /app
 
-ARG APP_VERSION=1.1.0
+ARG APP_VERSION=1.2.0
 ARG APP_BRANCH=local
 ARG APP_COMMIT=unknown
 

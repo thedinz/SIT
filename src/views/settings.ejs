@@ -49,6 +49,18 @@
     </form>
   </section>
 
+  <section class="settings-card">
+    <h2>Backup</h2>
+    <a class="secondary-button" href="<%= urlFor('/settings/export') %>">Export Backup</a>
+    <form class="stack" method="post" action="<%= urlFor('/settings/import') %>" enctype="multipart/form-data" data-confirm="Importing a backup will replace the current database records, uploaded attachments, and logo. Continue?">
+      <div class="field">
+        <label for="backup">Import backup</label>
+        <input id="backup" name="backup" type="file" accept="application/json,.json" required>
+      </div>
+      <button class="danger-button" type="submit">Import Backup</button>
+    </form>
+  </section>
+
   <section class="settings-card wide-card">
     <h2>Departments</h2>
     <form class="add-row" method="post" action="<%= urlFor('/settings/departments') %>">

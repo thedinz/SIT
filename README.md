@@ -7,9 +7,11 @@ A simple self-hosted issue-and-resolution log for church production teams. It is
 - Single shared password, no user accounts
 - Dark theme by default, with a light option
 - Search, department filter, sorting, page-size controls, and pagination
+- Submitter name, multi-department issue tagging, and pending/resolved status
 - WYSIWYG issue and resolution editors with bold, italic, lists, and links
 - Screenshot/file attachments for images and PDFs
 - Settings for title, logo, departments, theme, and shared password
+- JSON backup export/import from Settings
 - Footer with app version and branch metadata
 - SQLite database with first-run migrations and seeded departments
 - Docker Compose setup with persistent database, uploads, and logo storage
@@ -71,6 +73,8 @@ Docker Compose stores app data in local folders:
 ```
 
 The app container uses `/data/db`, `/data/uploads`, and `/data/logo` internally.
+
+Settings also includes a JSON backup export/import tool. The backup contains database records, app settings, logo data, and uploaded attachments. Keep backup files private because they include the stored shared-password hash.
 
 ## Docker Compose Example
 

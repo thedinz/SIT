@@ -14,6 +14,7 @@ const bcrypt = require('bcryptjs');
 const {
   db,
   DB_PATH,
+  DATA_DIR,
   UPLOAD_DIR,
   LOGO_DIR,
   getSetting,
@@ -31,6 +32,8 @@ const APP_BRANCH = process.env.APP_BRANCH || process.env.SIT_BRANCH || 'local';
 const APP_COMMIT = process.env.APP_COMMIT || process.env.SIT_COMMIT || '';
 const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 const MAX_LOGO_SIZE = 3 * 1024 * 1024;
+const MAX_BACKUP_SIZE = 250 * 1024 * 1024;
+const VALID_STATUSES = new Set(['pending', 'resolved']);
 const allowedAttachmentTypes = new Map([
   ['image/jpeg', ['.jpg', '.jpeg']],
   ['image/png', ['.png']],
@@ -141,6 +144,19 @@ const logoUpload = multer({
   limits: { fileSize: MAX_LOGO_SIZE, files: 1 }
 });
 
+const backupUpload = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: (_req, file, cb) => {
+    const extension = path.extname(file.originalname || '').toLowerCase();
+    if (extension !== '.json' && file.mimetype !== 'application/json') {
+      cb(new Error('Choose a Simple Issue Tracker JSON backup file.'));
+      return;
+    }
+    cb(null, true);
+  },
+  limits: { fileSize: MAX_BACKUP_SIZE, files: 1 }
+});
+
 function setFlash(req, type, message) {
   req.session.flash = { type, message };
 }
@@ -212,14 +228,58 @@ function safePositiveInt(value, fallback = 1) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function normalizeStatus(value) {
+  return VALID_STATUSES.has(value) ? value : 'pending';
+}
+
+function selectedIdsFrom(value) {
+  const rawValues = Array.isArray(value) ? value : value ? [value] : [];
+  return [...new Set(
+    rawValues
+      .map((id) => Number(id))
+      .filter((id) => Number.isInteger(id) && id > 0)
+  )];
+}
+
+function validDepartmentIds(ids) {
+  if (ids.length === 0) {
+    return [];
+  }
+
+  const placeholders = ids.map(() => '?').join(',');
+  return db
+    .prepare(`SELECT id FROM departments WHERE id IN (${placeholders}) ORDER BY lower(name)`)
+    .all(...ids)
+    .map((row) => row.id);
+}
+
+function saveIssueDepartments(issueId, departmentIds) {
+  const save = db.transaction((id, ids) => {
+    db.prepare('DELETE FROM issue_departments WHERE issue_id = ?').run(id);
+    const insert = db.prepare('INSERT OR IGNORE INTO issue_departments (issue_id, department_id) VALUES (?, ?)');
+    for (const departmentId of ids) {
+      insert.run(id, departmentId);
+    }
+  });
+
+  save(issueId, departmentIds);
+}
+
+function getIssueDepartmentIds(issueId) {
+  return db
+    .prepare('SELECT department_id FROM issue_departments WHERE issue_id = ? ORDER BY department_id')
+    .all(issueId)
+    .map((row) => row.department_id);
+}
+
 function getDepartmentsWithCounts() {
   return db
     .prepare(`
       SELECT
         d.*,
-        COUNT(i.id) AS issue_count
+        COUNT(idp.issue_id) AS issue_count
       FROM departments d
-      LEFT JOIN issues i ON i.department_id = d.id
+      LEFT JOIN issue_departments idp ON idp.department_id = d.id
       GROUP BY d.id
       ORDER BY lower(d.name)
     `)
@@ -231,14 +291,20 @@ function getDepartments() {
 }
 
 function getIssue(id) {
-  return db
+  const issue = db
     .prepare(`
-      SELECT i.*, d.name AS department_name
+      SELECT i.*
       FROM issues i
-      JOIN departments d ON d.id = i.department_id
       WHERE i.id = ?
     `)
     .get(id);
+
+  if (!issue) {
+    return null;
+  }
+
+  issue.department_ids = getIssueDepartmentIds(issue.id);
+  return issue;
 }
 
 function getAttachments(issueId) {
@@ -350,6 +416,200 @@ function deleteAttachmentFiles(issueId, ids) {
   }
 }
 
+function readFileBase64IfExists(directory, filename) {
+  const safeFilename = normalizeFilename(filename);
+  if (!safeFilename) {
+    return '';
+  }
+
+  const filePath = path.join(directory, safeFilename);
+  if (!filePath.startsWith(directory) || !fs.existsSync(filePath)) {
+    return '';
+  }
+  return fs.readFileSync(filePath).toString('base64');
+}
+
+function createBackupData() {
+  const attachments = db.prepare('SELECT * FROM attachments ORDER BY id').all().map((attachment) => ({
+    ...attachment,
+    data_base64: readFileBase64IfExists(UPLOAD_DIR, attachment.filename)
+  }));
+
+  const logoFilename = getSetting('logo_filename');
+  const logos = logoFilename
+    ? [{
+        filename: normalizeFilename(logoFilename),
+        data_base64: readFileBase64IfExists(LOGO_DIR, logoFilename)
+      }]
+    : [];
+
+  return {
+    backup_version: 2,
+    exported_at: nowIso(),
+    app: {
+      name: APP_NAME,
+      version: APP_VERSION
+    },
+    settings: db.prepare('SELECT key, value FROM settings ORDER BY key').all(),
+    departments: db.prepare('SELECT id, name, created_at, updated_at FROM departments ORDER BY id').all(),
+    issues: db.prepare(`
+      SELECT id, department_id, poster_name, status, issue_html, resolution_html, created_at, updated_at
+      FROM issues
+      ORDER BY id
+    `).all(),
+    issue_departments: db.prepare(`
+      SELECT issue_id, department_id
+      FROM issue_departments
+      ORDER BY issue_id, department_id
+    `).all(),
+    attachments,
+    logos
+  };
+}
+
+function writeBackupFilesTo(directory, files) {
+  fs.mkdirSync(directory, { recursive: true });
+  for (const file of files || []) {
+    const filename = normalizeFilename(file.filename);
+    if (!filename || !file.data_base64) {
+      continue;
+    }
+    fs.writeFileSync(path.join(directory, filename), Buffer.from(file.data_base64, 'base64'));
+  }
+}
+
+function clearDirectory(directory) {
+  fs.mkdirSync(directory, { recursive: true });
+  for (const entry of fs.readdirSync(directory)) {
+    fs.rmSync(path.join(directory, entry), { recursive: true, force: true });
+  }
+}
+
+function restoreBackupData(backup) {
+  if (!backup || !Array.isArray(backup.departments) || !Array.isArray(backup.issues)) {
+    throw new Error('That backup file does not look like a Simple Issue Tracker backup.');
+  }
+
+  const tmpRoot = fs.mkdtempSync(path.join(DATA_DIR, 'import-'));
+  const tmpUploadDir = path.join(tmpRoot, 'uploads');
+  const tmpLogoDir = path.join(tmpRoot, 'logo');
+
+  try {
+    writeBackupFilesTo(tmpUploadDir, backup.attachments || []);
+    writeBackupFilesTo(tmpLogoDir, backup.logos || []);
+
+    const restore = db.transaction(() => {
+      db.prepare('DELETE FROM attachments').run();
+      db.prepare('DELETE FROM issue_departments').run();
+      db.prepare('DELETE FROM issues').run();
+      db.prepare('DELETE FROM departments').run();
+      db.prepare('DELETE FROM settings').run();
+
+      const insertSetting = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
+      for (const setting of backup.settings || []) {
+        if (setting && setting.key) {
+          insertSetting.run(String(setting.key), String(setting.value || ''));
+        }
+      }
+
+      if (!getSetting('password_hash')) {
+        setSetting('password_hash', bcrypt.hashSync('admin', 12));
+      }
+      if (!getSetting('session_secret')) {
+        setSetting('session_secret', crypto.randomBytes(32).toString('hex'));
+      }
+      if (!getSetting('theme')) {
+        setSetting('theme', 'dark');
+      }
+      if (!getSetting('display_title')) {
+        setSetting('display_title', APP_NAME);
+      }
+
+      const insertDepartment = db.prepare(`
+        INSERT INTO departments (id, name, created_at, updated_at)
+        VALUES (?, ?, ?, ?)
+      `);
+      const restoredDepartmentIds = [];
+      for (const department of backup.departments) {
+        const departmentId = Number(department.id);
+        restoredDepartmentIds.push(departmentId);
+        insertDepartment.run(
+          departmentId,
+          String(department.name || '').slice(0, 80),
+          department.created_at || nowIso(),
+          department.updated_at || department.created_at || nowIso()
+        );
+      }
+
+      if (restoredDepartmentIds.length === 0) {
+        throw new Error('The backup must include at least one department.');
+      }
+
+      const insertIssue = db.prepare(`
+        INSERT INTO issues (id, department_id, poster_name, status, issue_html, resolution_html, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const issue of backup.issues) {
+        const issueDepartmentId = restoredDepartmentIds.includes(Number(issue.department_id))
+          ? Number(issue.department_id)
+          : restoredDepartmentIds[0];
+        insertIssue.run(
+          Number(issue.id),
+          issueDepartmentId,
+          String(issue.poster_name || '').slice(0, 120),
+          normalizeStatus(issue.status),
+          String(issue.issue_html || ''),
+          String(issue.resolution_html || ''),
+          issue.created_at || nowIso(),
+          issue.updated_at || issue.created_at || nowIso()
+        );
+      }
+
+      const issueDepartments = Array.isArray(backup.issue_departments) && backup.issue_departments.length > 0
+        ? backup.issue_departments
+        : backup.issues.map((issue) => ({ issue_id: issue.id, department_id: issue.department_id }));
+      const insertIssueDepartment = db.prepare(`
+        INSERT OR IGNORE INTO issue_departments (issue_id, department_id)
+        VALUES (?, ?)
+      `);
+      for (const issueDepartment of issueDepartments) {
+        const departmentId = restoredDepartmentIds.includes(Number(issueDepartment.department_id))
+          ? Number(issueDepartment.department_id)
+          : restoredDepartmentIds[0];
+        insertIssueDepartment.run(Number(issueDepartment.issue_id), departmentId);
+      }
+
+      const insertAttachment = db.prepare(`
+        INSERT INTO attachments (id, issue_id, filename, original_filename, mime_type, size, uploaded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const attachment of backup.attachments || []) {
+        const filename = normalizeFilename(attachment.filename);
+        if (!filename) {
+          continue;
+        }
+        insertAttachment.run(
+          Number(attachment.id),
+          Number(attachment.issue_id),
+          filename,
+          normalizeFilename(attachment.original_filename || filename),
+          String(attachment.mime_type || 'application/octet-stream'),
+          Number(attachment.size || 0),
+          attachment.uploaded_at || nowIso()
+        );
+      }
+    });
+
+    restore();
+    clearDirectory(UPLOAD_DIR);
+    clearDirectory(LOGO_DIR);
+    fs.cpSync(tmpUploadDir, UPLOAD_DIR, { recursive: true });
+    fs.cpSync(tmpLogoDir, LOGO_DIR, { recursive: true });
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
 function uploadMiddleware(middleware, failureRedirect = 'back') {
   return (req, res, next) => {
     middleware(req, res, (error) => {
@@ -379,7 +639,7 @@ function renderIssueForm(res, options) {
 app.use((req, res, next) => {
   res.locals.appName = APP_NAME;
   res.locals.displayTitle = getSetting('display_title', APP_NAME);
-  res.locals.assetVersion = '20260611-5';
+  res.locals.assetVersion = '20260626-1';
   res.locals.appVersion = APP_VERSION;
   res.locals.appBranch = APP_BRANCH;
   res.locals.appCommit = APP_COMMIT ? APP_COMMIT.slice(0, 7) : '';
@@ -452,14 +712,24 @@ app.get('/', (req, res) => {
   const params = [];
 
   if (q) {
-    where.push('(i.issue_html LIKE ? OR i.resolution_html LIKE ? OR d.name LIKE ?)');
-    params.push(`%${q}%`, `%${q}%`, `%${q}%`);
+    where.push(`(
+      i.issue_html LIKE ?
+      OR i.resolution_html LIKE ?
+      OR i.poster_name LIKE ?
+      OR EXISTS (
+        SELECT 1
+        FROM issue_departments sidp
+        JOIN departments sd ON sd.id = sidp.department_id
+        WHERE sidp.issue_id = i.id AND sd.name LIKE ?
+      )
+    )`);
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
   }
 
   if (department && department !== 'all') {
     const departmentId = Number(department);
     if (Number.isInteger(departmentId) && departmentId > 0) {
-      where.push('i.department_id = ?');
+      where.push('EXISTS (SELECT 1 FROM issue_departments fidp WHERE fidp.issue_id = i.id AND fidp.department_id = ?)');
       params.push(departmentId);
     }
   }
@@ -469,7 +739,6 @@ app.get('/', (req, res) => {
     .prepare(`
       SELECT COUNT(*) AS total
       FROM issues i
-      JOIN departments d ON d.id = i.department_id
       ${whereSql}
     `)
     .get(...params).total;
@@ -480,10 +749,14 @@ app.get('/', (req, res) => {
 
   const issues = db
     .prepare(`
-      SELECT i.*, d.name AS department_name
+      SELECT
+        i.*,
+        GROUP_CONCAT(d.name, ', ') AS department_names
       FROM issues i
-      JOIN departments d ON d.id = i.department_id
+      LEFT JOIN issue_departments idp ON idp.issue_id = i.id
+      LEFT JOIN departments d ON d.id = idp.department_id
       ${whereSql}
+      GROUP BY i.id
       ORDER BY ${orderSql}
       LIMIT ? OFFSET ?
     `)
@@ -527,7 +800,9 @@ app.get('/issues/new', (_req, res) => {
     mode: 'create',
     action: '/issues',
     issue: {
-      department_id: '',
+      poster_name: '',
+      status: 'pending',
+      department_ids: [],
       issue_html: '',
       resolution_html: ''
     },
@@ -537,13 +812,22 @@ app.get('/issues/new', (_req, res) => {
 });
 
 app.post('/issues', uploadMiddleware(attachmentUpload.array('attachments', 12), '/issues/new'), (req, res) => {
-  const departmentId = Number(req.body.department_id);
+  const departmentIds = validDepartmentIds(selectedIdsFrom(req.body.department_ids));
+  const posterName = String(req.body.poster_name || '').trim().slice(0, 120);
+  const status = normalizeStatus(req.body.status);
   const issueHtml = sanitizeEditorHtml(req.body.issue_html);
   const resolutionHtml = sanitizeEditorHtml(req.body.resolution_html);
 
-  if (!Number.isInteger(departmentId) || !db.prepare('SELECT 1 FROM departments WHERE id = ?').get(departmentId)) {
+  if (!posterName) {
     removeUploadedFiles(req.files);
-    setFlash(req, 'error', 'Choose a department before saving.');
+    setFlash(req, 'error', 'Add your name before saving.');
+    redirectTo(req, res, '/issues/new');
+    return;
+  }
+
+  if (departmentIds.length === 0) {
+    removeUploadedFiles(req.files);
+    setFlash(req, 'error', 'Choose at least one department before saving.');
     redirectTo(req, res, '/issues/new');
     return;
   }
@@ -556,14 +840,20 @@ app.post('/issues', uploadMiddleware(attachmentUpload.array('attachments', 12), 
   }
 
   const timestamp = nowIso();
-  const result = db
-    .prepare(`
-      INSERT INTO issues (department_id, issue_html, resolution_html, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-    `)
-    .run(departmentId, issueHtml, resolutionHtml, timestamp, timestamp);
+  const createIssue = db.transaction(() => {
+    const result = db
+      .prepare(`
+        INSERT INTO issues (department_id, poster_name, status, issue_html, resolution_html, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(departmentIds[0], posterName, status, issueHtml, resolutionHtml, timestamp, timestamp);
 
-  insertAttachments(result.lastInsertRowid, req.files);
+    saveIssueDepartments(result.lastInsertRowid, departmentIds);
+    return result.lastInsertRowid;
+  });
+
+  const issueId = createIssue();
+  insertAttachments(issueId, req.files);
   setFlash(req, 'success', 'Issue added.');
   redirectTo(req, res, '/');
 });
@@ -596,13 +886,22 @@ app.post('/issues/:id', uploadMiddleware(attachmentUpload.array('attachments', 1
     return;
   }
 
-  const departmentId = Number(req.body.department_id);
+  const departmentIds = validDepartmentIds(selectedIdsFrom(req.body.department_ids));
+  const posterName = String(req.body.poster_name || '').trim().slice(0, 120);
+  const status = normalizeStatus(req.body.status);
   const issueHtml = sanitizeEditorHtml(req.body.issue_html);
   const resolutionHtml = sanitizeEditorHtml(req.body.resolution_html);
 
-  if (!Number.isInteger(departmentId) || !db.prepare('SELECT 1 FROM departments WHERE id = ?').get(departmentId)) {
+  if (!posterName) {
     removeUploadedFiles(req.files);
-    setFlash(req, 'error', 'Choose a department before saving.');
+    setFlash(req, 'error', 'Add the submitter name before saving.');
+    redirectTo(req, res, `/issues/${issueId}/edit`);
+    return;
+  }
+
+  if (departmentIds.length === 0) {
+    removeUploadedFiles(req.files);
+    setFlash(req, 'error', 'Choose at least one department before saving.');
     redirectTo(req, res, `/issues/${issueId}/edit`);
     return;
   }
@@ -615,11 +914,15 @@ app.post('/issues/:id', uploadMiddleware(attachmentUpload.array('attachments', 1
   }
 
   deleteAttachmentFiles(issueId, req.body.delete_attachment_ids);
-  db.prepare(`
-    UPDATE issues
-    SET department_id = ?, issue_html = ?, resolution_html = ?, updated_at = ?
-    WHERE id = ?
-  `).run(departmentId, issueHtml, resolutionHtml, nowIso(), issueId);
+  const updateIssue = db.transaction(() => {
+    db.prepare(`
+      UPDATE issues
+      SET department_id = ?, poster_name = ?, status = ?, issue_html = ?, resolution_html = ?, updated_at = ?
+      WHERE id = ?
+    `).run(departmentIds[0], posterName, status, issueHtml, resolutionHtml, nowIso(), issueId);
+    saveIssueDepartments(issueId, departmentIds);
+  });
+  updateIssue();
   insertAttachments(issueId, req.files);
 
   setFlash(req, 'success', 'Issue updated.');
@@ -686,6 +989,32 @@ app.post('/settings/theme', (req, res) => {
   redirectTo(req, res, '/settings');
 });
 
+app.get('/settings/export', (_req, res) => {
+  const backup = createBackupData();
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', `attachment; filename="simple-issue-tracker-backup-${timestamp}.json"`);
+  res.send(JSON.stringify(backup, null, 2));
+});
+
+app.post('/settings/import', uploadMiddleware(backupUpload.single('backup'), '/settings'), (req, res) => {
+  if (!req.file) {
+    setFlash(req, 'error', 'Choose a backup file to import.');
+    redirectTo(req, res, '/settings');
+    return;
+  }
+
+  try {
+    const backup = JSON.parse(req.file.buffer.toString('utf8'));
+    restoreBackupData(backup);
+    setFlash(req, 'success', 'Backup imported.');
+  } catch (error) {
+    console.error(error);
+    setFlash(req, 'error', error.message || 'The backup could not be imported.');
+  }
+  redirectTo(req, res, '/settings');
+});
+
 app.post('/settings/departments', (req, res) => {
   const name = String(req.body.name || '').trim().slice(0, 80);
   if (!name) {
@@ -724,7 +1053,7 @@ app.post('/settings/departments/:id', (req, res) => {
 
 app.post('/settings/departments/:id/delete', (req, res) => {
   const id = Number(req.params.id);
-  const used = db.prepare('SELECT COUNT(*) AS count FROM issues WHERE department_id = ?').get(id).count;
+  const used = db.prepare('SELECT COUNT(*) AS count FROM issue_departments WHERE department_id = ?').get(id).count;
   if (used > 0) {
     setFlash(req, 'error', 'That department is used by existing issues, so it cannot be deleted.');
     redirectTo(req, res, '/settings');

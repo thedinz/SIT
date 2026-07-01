@@ -49,16 +49,56 @@
     </form>
   </section>
 
-  <section class="settings-card">
-    <h2>Backup</h2>
-    <a class="secondary-button" href="<%= urlFor('/settings/export') %>">Export Backup</a>
-    <form class="stack" method="post" action="<%= urlFor('/settings/import') %>" enctype="multipart/form-data" data-confirm="Importing a backup will replace the current database records, uploaded attachments, and logo. Continue?">
+  <section class="settings-card wide-card">
+    <h2>Full Backups</h2>
+    <form class="backup-schedule" method="post" action="<%= urlFor('/settings/backups/schedule') %>">
       <div class="field">
-        <label for="backup">Import backup</label>
-        <input id="backup" name="backup" type="file" accept="application/json,.json" required>
+        <label for="backup_frequency">Automatic backup schedule</label>
+        <select id="backup_frequency" name="backup_frequency">
+          <option value="daily" <%= backupFrequency === 'daily' ? 'selected' : '' %>>Daily</option>
+          <option value="weekly" <%= backupFrequency === 'weekly' ? 'selected' : '' %>>Weekly</option>
+          <option value="monthly" <%= backupFrequency === 'monthly' ? 'selected' : '' %>>Monthly</option>
+        </select>
       </div>
-      <button class="danger-button" type="submit">Import Backup</button>
+      <button class="secondary-button" type="submit">Save Schedule</button>
     </form>
+
+    <div class="backup-meta">
+      <span>Last run: <strong><%= backupLastRunLabel || 'Not yet' %></strong></span>
+      <span>Next due: <strong><%= nextBackupLabel %></strong></span>
+    </div>
+
+    <div class="backup-actions">
+      <a class="secondary-button" href="<%= urlFor('/settings/export') %>">Download Backup Now</a>
+      <form method="post" action="<%= urlFor('/settings/backups/run') %>">
+        <button class="ghost-button" type="submit">Create Server Backup</button>
+      </form>
+    </div>
+
+    <form class="stack" method="post" action="<%= urlFor('/settings/import') %>" enctype="multipart/form-data" data-confirm="Restoring a backup will replace the current database, settings, uploads, and logo. Continue?">
+      <div class="field">
+        <label for="backup">Restore backup</label>
+        <input id="backup" name="backup" type="file" accept="application/zip,.zip,application/json,.json" required>
+      </div>
+      <button class="danger-button" type="submit">Restore Backup</button>
+    </form>
+
+    <div class="backup-list">
+      <h3>Stored Backups</h3>
+      <% if (backupFiles.length === 0) { %>
+        <p class="muted">No stored backups yet.</p>
+      <% } else { %>
+        <% backupFiles.slice(0, 8).forEach((backup) => { %>
+          <div class="backup-row">
+            <div>
+              <strong><%= backup.createdAtLabel %></strong>
+              <span><%= backup.formattedSize %></span>
+            </div>
+            <a class="ghost-button compact" href="<%= urlFor(`/settings/backups/${encodeURIComponent(backup.filename)}`) %>">Download</a>
+          </div>
+        <% }) %>
+      <% } %>
+    </div>
   </section>
 
   <section class="settings-card wide-card">

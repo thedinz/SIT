@@ -10,6 +10,8 @@ const morgan = require('morgan');
 const cookieSession = require('cookie-session');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
+const Database = require('better-sqlite3');
+const AdmZip = require('adm-zip');
 
 const {
   db,
@@ -17,6 +19,8 @@ const {
   DATA_DIR,
   UPLOAD_DIR,
   LOGO_DIR,
+  BACKUP_DIR,
+  TMP_DIR,
   getSetting,
   setSetting,
   nowIso
@@ -32,8 +36,12 @@ const APP_BRANCH = process.env.APP_BRANCH || process.env.SIT_BRANCH || 'local';
 const APP_COMMIT = process.env.APP_COMMIT || process.env.SIT_COMMIT || '';
 const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 const MAX_LOGO_SIZE = 3 * 1024 * 1024;
-const MAX_BACKUP_SIZE = 250 * 1024 * 1024;
+const MAX_BACKUP_SIZE = 1024 * 1024 * 1024;
 const VALID_STATUSES = new Set(['pending', 'resolved']);
+const VALID_BACKUP_FREQUENCIES = new Set(['daily', 'weekly', 'monthly']);
+const BACKUP_FILENAME_PREFIX = 'simple-issue-tracker-backup-';
+const SCHEDULED_BACKUP_CHECK_MS = 60 * 60 * 1000;
+const SCHEDULED_BACKUP_RETENTION = 30;
 const allowedAttachmentTypes = new Map([
   ['image/jpeg', ['.jpg', '.jpeg']],
   ['image/png', ['.png']],
@@ -145,11 +153,17 @@ const logoUpload = multer({
 });
 
 const backupUpload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: TMP_DIR,
+    filename(_req, file, cb) {
+      const extension = path.extname(file.originalname || '').toLowerCase();
+      cb(null, `${Date.now()}-${crypto.randomUUID()}${extension || '.zip'}`);
+    }
+  }),
   fileFilter: (_req, file, cb) => {
     const extension = path.extname(file.originalname || '').toLowerCase();
-    if (extension !== '.json' && file.mimetype !== 'application/json') {
-      cb(new Error('Choose a Simple Issue Tracker JSON backup file.'));
+    if (!['.zip', '.json'].includes(extension)) {
+      cb(new Error('Choose a Simple Issue Tracker zip backup file.'));
       return;
     }
     cb(null, true);
@@ -230,6 +244,43 @@ function safePositiveInt(value, fallback = 1) {
 
 function normalizeStatus(value) {
   return VALID_STATUSES.has(value) ? value : 'pending';
+}
+
+function normalizeBackupFrequency(value) {
+  return VALID_BACKUP_FREQUENCIES.has(value) ? value : 'weekly';
+}
+
+function nextBackupTime(lastRunAt, frequency) {
+  const lastRun = lastRunAt ? new Date(lastRunAt) : null;
+  if (!lastRun || Number.isNaN(lastRun.getTime())) {
+    return new Date(0);
+  }
+
+  const nextRun = new Date(lastRun);
+  if (frequency === 'daily') {
+    nextRun.setDate(nextRun.getDate() + 1);
+  } else if (frequency === 'monthly') {
+    nextRun.setMonth(nextRun.getMonth() + 1);
+  } else {
+    nextRun.setDate(nextRun.getDate() + 7);
+  }
+  return nextRun;
+}
+
+function formatBytes(bytes) {
+  const size = Number(bytes || 0);
+  if (size < 1024) {
+    return `${size} B`;
+  }
+
+  const units = ['KB', 'MB', 'GB'];
+  let value = size / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
 function selectedIdsFrom(value) {
@@ -429,17 +480,22 @@ function readFileBase64IfExists(directory, filename) {
   return fs.readFileSync(filePath).toString('base64');
 }
 
-function createBackupData() {
-  const attachments = db.prepare('SELECT * FROM attachments ORDER BY id').all().map((attachment) => ({
-    ...attachment,
-    data_base64: readFileBase64IfExists(UPLOAD_DIR, attachment.filename)
-  }));
+function createBackupData(options = {}) {
+  const includeFileData = options.includeFileData !== false;
+  const attachments = db.prepare('SELECT * FROM attachments ORDER BY id').all().map((attachment) => (
+    includeFileData
+      ? {
+          ...attachment,
+          data_base64: readFileBase64IfExists(UPLOAD_DIR, attachment.filename)
+        }
+      : { ...attachment }
+  ));
 
   const logoFilename = getSetting('logo_filename');
   const logos = logoFilename
     ? [{
         filename: normalizeFilename(logoFilename),
-        data_base64: readFileBase64IfExists(LOGO_DIR, logoFilename)
+        ...(includeFileData ? { data_base64: readFileBase64IfExists(LOGO_DIR, logoFilename) } : {})
       }]
     : [];
 
@@ -485,18 +541,334 @@ function clearDirectory(directory) {
   }
 }
 
-function restoreBackupData(backup) {
+function copyDirectoryContents(sourceDirectory, destinationDirectory) {
+  clearDirectory(destinationDirectory);
+  fs.mkdirSync(sourceDirectory, { recursive: true });
+  for (const entry of fs.readdirSync(sourceDirectory)) {
+    fs.cpSync(path.join(sourceDirectory, entry), path.join(destinationDirectory, entry), { recursive: true });
+  }
+}
+
+function isPathInside(parentDirectory, targetPath) {
+  const relative = path.relative(parentDirectory, targetPath);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function timestampForFilename() {
+  return new Date().toISOString().replace(/[:.]/g, '-');
+}
+
+function backupArchiveFilename(label = 'manual') {
+  const safeLabel = String(label || 'manual').replace(/[^a-zA-Z0-9_-]/g, '_');
+  return `${BACKUP_FILENAME_PREFIX}${timestampForFilename()}-${safeLabel}.zip`;
+}
+
+function normalizeBackupArchiveName(filename) {
+  const safeFilename = normalizeFilename(filename);
+  if (!safeFilename.endsWith('.zip')) {
+    return '';
+  }
+  return safeFilename;
+}
+
+function backupArchivePath(filename) {
+  const safeFilename = normalizeBackupArchiveName(filename);
+  if (!safeFilename) {
+    return '';
+  }
+
+  const filePath = path.join(BACKUP_DIR, safeFilename);
+  return isPathInside(BACKUP_DIR, filePath) ? filePath : '';
+}
+
+function addDirectoryToZip(zip, sourceDirectory, archiveDirectory) {
+  fs.mkdirSync(sourceDirectory, { recursive: true });
+  for (const entry of fs.readdirSync(sourceDirectory, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceDirectory, entry.name);
+    const archivePath = `${archiveDirectory}/${entry.name}`;
+    if (entry.isDirectory()) {
+      addDirectoryToZip(zip, sourcePath, archivePath);
+    } else if (entry.isFile()) {
+      zip.addLocalFile(sourcePath, path.posix.dirname(archivePath), path.posix.basename(archivePath));
+    }
+  }
+}
+
+async function createFullBackupArchive(destinationPath) {
+  const tmpRoot = fs.mkdtempSync(path.join(TMP_DIR, 'backup-build-'));
+  const dbSnapshotPath = path.join(tmpRoot, 'simple_issue_tracker.sqlite');
+  const manifestPath = path.join(tmpRoot, 'manifest.json');
+  const recordsPath = path.join(tmpRoot, 'records.json');
+
+  try {
+    await db.backup(dbSnapshotPath);
+    const manifest = {
+      backup_type: 'simple-issue-tracker-full',
+      backup_version: 3,
+      exported_at: nowIso(),
+      app: {
+        name: APP_NAME,
+        version: APP_VERSION,
+        branch: APP_BRANCH,
+        commit: APP_COMMIT
+      },
+      includes: ['database', 'settings', 'departments', 'issues', 'attachments', 'uploads', 'logo']
+    };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    fs.writeFileSync(recordsPath, JSON.stringify(createBackupData({ includeFileData: false }), null, 2));
+
+    const zip = new AdmZip();
+    zip.addLocalFile(manifestPath, '', 'manifest.json');
+    zip.addLocalFile(recordsPath, 'metadata', 'records.json');
+    zip.addLocalFile(dbSnapshotPath, 'database', 'simple_issue_tracker.sqlite');
+    addDirectoryToZip(zip, UPLOAD_DIR, 'uploads');
+    addDirectoryToZip(zip, LOGO_DIR, 'logo');
+    fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
+    zip.writeZip(destinationPath);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+function listBackupArchives() {
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  return fs
+    .readdirSync(BACKUP_DIR)
+    .filter((filename) => filename.startsWith(BACKUP_FILENAME_PREFIX) && filename.endsWith('.zip'))
+    .map((filename) => {
+      const filePath = path.join(BACKUP_DIR, filename);
+      const stats = fs.statSync(filePath);
+      return {
+        filename,
+        size: stats.size,
+        formattedSize: formatBytes(stats.size),
+        createdAt: stats.mtime.toISOString(),
+        createdAtLabel: formatDate(stats.mtime)
+      };
+    })
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+function pruneScheduledBackups() {
+  const scheduledBackups = listBackupArchives()
+    .filter((backup) => backup.filename.endsWith('-scheduled.zip'));
+
+  for (const backup of scheduledBackups.slice(SCHEDULED_BACKUP_RETENTION)) {
+    const filePath = backupArchivePath(backup.filename);
+    if (filePath) {
+      fs.rmSync(filePath, { force: true });
+    }
+  }
+}
+
+async function createStoredBackup(label = 'manual') {
+  const filename = backupArchiveFilename(label);
+  const filePath = path.join(BACKUP_DIR, filename);
+  await createFullBackupArchive(filePath);
+  return {
+    filename,
+    filePath,
+    size: fs.statSync(filePath).size
+  };
+}
+
+function safeZipEntryName(entryName) {
+  const rawName = String(entryName || '').replace(/\\/g, '/');
+  const segments = rawName.split('/');
+  const normalized = path.posix.normalize(rawName);
+  if (
+    !normalized ||
+    normalized === '.' ||
+    rawName.startsWith('/') ||
+    /^[a-zA-Z]:/.test(rawName) ||
+    segments.includes('..') ||
+    normalized.startsWith('/') ||
+    normalized.startsWith('../') ||
+    normalized.includes('/../')
+  ) {
+    return '';
+  }
+  return normalized;
+}
+
+function writeZipEntry(entry, destinationDirectory, relativeName) {
+  const safeName = safeZipEntryName(relativeName);
+  if (!safeName) {
+    return;
+  }
+
+  const filePath = path.join(destinationDirectory, ...safeName.split('/'));
+  if (!isPathInside(destinationDirectory, filePath)) {
+    throw new Error('The backup archive contains an unsafe file path.');
+  }
+
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, entry.getData());
+}
+
+function tableExists(database, tableName) {
+  return Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName));
+}
+
+function tableColumns(database, tableName) {
+  if (!tableExists(database, tableName)) {
+    return new Set();
+  }
+  return new Set(database.prepare(`PRAGMA table_info(${tableName})`).all().map((column) => column.name));
+}
+
+function readBackupDatabaseData(databasePath) {
+  const backupDb = new Database(databasePath, { readonly: true, fileMustExist: true });
+  try {
+    if (!tableExists(backupDb, 'departments') || !tableExists(backupDb, 'issues')) {
+      throw new Error('The backup database is missing required Simple Issue Tracker tables.');
+    }
+
+    const issueColumns = tableColumns(backupDb, 'issues');
+    const posterSql = issueColumns.has('poster_name') ? 'poster_name' : "'' AS poster_name";
+    const statusSql = issueColumns.has('status') ? 'status' : "'pending' AS status";
+    const attachments = tableExists(backupDb, 'attachments')
+      ? backupDb.prepare('SELECT id, issue_id, filename, original_filename, mime_type, size, uploaded_at FROM attachments ORDER BY id').all()
+      : [];
+    const issueDepartments = tableExists(backupDb, 'issue_departments')
+      ? backupDb.prepare('SELECT issue_id, department_id FROM issue_departments ORDER BY issue_id, department_id').all()
+      : [];
+
+    return {
+      backup_version: 3,
+      exported_at: nowIso(),
+      settings: tableExists(backupDb, 'settings')
+        ? backupDb.prepare('SELECT key, value FROM settings ORDER BY key').all()
+        : [],
+      departments: backupDb.prepare('SELECT id, name, created_at, updated_at FROM departments ORDER BY id').all(),
+      issues: backupDb.prepare(`
+        SELECT id, department_id, ${posterSql}, ${statusSql}, issue_html, resolution_html, created_at, updated_at
+        FROM issues
+        ORDER BY id
+      `).all(),
+      issue_departments: issueDepartments,
+      attachments,
+      logos: []
+    };
+  } finally {
+    backupDb.close();
+  }
+}
+
+function extractBackupArchive(archivePath, destinationRoot) {
+  const zip = new AdmZip(archivePath);
+  const tmpUploadDir = path.join(destinationRoot, 'uploads');
+  const tmpLogoDir = path.join(destinationRoot, 'logo');
+  const tmpDatabasePath = path.join(destinationRoot, 'simple_issue_tracker.sqlite');
+  let manifest = null;
+
+  fs.mkdirSync(tmpUploadDir, { recursive: true });
+  fs.mkdirSync(tmpLogoDir, { recursive: true });
+
+  for (const entry of zip.getEntries()) {
+    if (entry.isDirectory) {
+      continue;
+    }
+
+    const entryName = safeZipEntryName(entry.entryName);
+    if (!entryName) {
+      throw new Error('The backup archive contains an unsafe file path.');
+    }
+
+    if (entryName === 'manifest.json') {
+      manifest = JSON.parse(entry.getData().toString('utf8'));
+    } else if (entryName === 'database/simple_issue_tracker.sqlite') {
+      fs.writeFileSync(tmpDatabasePath, entry.getData());
+    } else if (entryName.startsWith('uploads/')) {
+      writeZipEntry(entry, tmpUploadDir, entryName.replace(/^uploads\//, ''));
+    } else if (entryName.startsWith('logo/')) {
+      writeZipEntry(entry, tmpLogoDir, entryName.replace(/^logo\//, ''));
+    }
+  }
+
+  if (!fs.existsSync(tmpDatabasePath)) {
+    throw new Error('The backup archive does not include the SQLite database snapshot.');
+  }
+
+  if (manifest && manifest.backup_type && manifest.backup_type !== 'simple-issue-tracker-full') {
+    throw new Error('That zip file is not a Simple Issue Tracker full backup.');
+  }
+
+  return {
+    databasePath: tmpDatabasePath,
+    uploadDir: tmpUploadDir,
+    logoDir: tmpLogoDir,
+    manifest
+  };
+}
+
+function restoreBackupArchive(archivePath) {
+  const tmpRoot = fs.mkdtempSync(path.join(TMP_DIR, 'restore-'));
+  try {
+    const extracted = extractBackupArchive(archivePath, tmpRoot);
+    const backup = readBackupDatabaseData(extracted.databasePath);
+    restoreBackupData(backup, {
+      uploadDir: extracted.uploadDir,
+      logoDir: extracted.logoDir
+    });
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+let scheduledBackupRunning = false;
+
+function scheduledBackupIsDue() {
+  const frequency = normalizeBackupFrequency(getSetting('backup_frequency', 'weekly'));
+  const lastRunAt = getSetting('backup_last_run_at');
+  return new Date() >= nextBackupTime(lastRunAt, frequency);
+}
+
+async function runScheduledBackupIfDue() {
+  if (scheduledBackupRunning || !scheduledBackupIsDue()) {
+    return;
+  }
+
+  scheduledBackupRunning = true;
+  try {
+    const backup = await createStoredBackup('scheduled');
+    setSetting('backup_last_run_at', nowIso());
+    pruneScheduledBackups();
+    console.info(`Scheduled backup created: ${backup.filename}`);
+  } catch (error) {
+    console.error('Scheduled backup failed:', error);
+  } finally {
+    scheduledBackupRunning = false;
+  }
+}
+
+function startScheduledBackups() {
+  setTimeout(() => {
+    runScheduledBackupIfDue();
+  }, 5000);
+  setInterval(() => {
+    runScheduledBackupIfDue();
+  }, SCHEDULED_BACKUP_CHECK_MS);
+}
+
+function restoreBackupData(backup, fileSource = {}) {
   if (!backup || !Array.isArray(backup.departments) || !Array.isArray(backup.issues)) {
     throw new Error('That backup file does not look like a Simple Issue Tracker backup.');
   }
 
-  const tmpRoot = fs.mkdtempSync(path.join(DATA_DIR, 'import-'));
-  const tmpUploadDir = path.join(tmpRoot, 'uploads');
-  const tmpLogoDir = path.join(tmpRoot, 'logo');
+  const tmpRoot = fs.mkdtempSync(path.join(TMP_DIR, 'import-'));
+  const tmpUploadDir = fileSource.uploadDir || path.join(tmpRoot, 'uploads');
+  const tmpLogoDir = fileSource.logoDir || path.join(tmpRoot, 'logo');
 
   try {
-    writeBackupFilesTo(tmpUploadDir, backup.attachments || []);
-    writeBackupFilesTo(tmpLogoDir, backup.logos || []);
+    if (!fileSource.uploadDir) {
+      writeBackupFilesTo(tmpUploadDir, backup.attachments || []);
+    }
+    if (!fileSource.logoDir) {
+      writeBackupFilesTo(tmpLogoDir, backup.logos || []);
+    }
+    fs.mkdirSync(tmpUploadDir, { recursive: true });
+    fs.mkdirSync(tmpLogoDir, { recursive: true });
 
     const restore = db.transaction(() => {
       db.prepare('DELETE FROM attachments').run();
@@ -523,6 +895,9 @@ function restoreBackupData(backup) {
       }
       if (!getSetting('display_title')) {
         setSetting('display_title', APP_NAME);
+      }
+      if (!getSetting('backup_frequency')) {
+        setSetting('backup_frequency', 'weekly');
       }
 
       const insertDepartment = db.prepare(`
@@ -601,10 +976,8 @@ function restoreBackupData(backup) {
     });
 
     restore();
-    clearDirectory(UPLOAD_DIR);
-    clearDirectory(LOGO_DIR);
-    fs.cpSync(tmpUploadDir, UPLOAD_DIR, { recursive: true });
-    fs.cpSync(tmpLogoDir, LOGO_DIR, { recursive: true });
+    copyDirectoryContents(tmpUploadDir, UPLOAD_DIR);
+    copyDirectoryContents(tmpLogoDir, LOGO_DIR);
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
@@ -639,7 +1012,7 @@ function renderIssueForm(res, options) {
 app.use((req, res, next) => {
   res.locals.appName = APP_NAME;
   res.locals.displayTitle = getSetting('display_title', APP_NAME);
-  res.locals.assetVersion = '20260626-1';
+  res.locals.assetVersion = '20260701-1';
   res.locals.appVersion = APP_VERSION;
   res.locals.appBranch = APP_BRANCH;
   res.locals.appCommit = APP_COMMIT ? APP_COMMIT.slice(0, 7) : '';
@@ -942,11 +1315,18 @@ app.get('/uploads/:filename', (req, res) => {
 });
 
 app.get('/settings', (_req, res) => {
+  const backupFrequency = normalizeBackupFrequency(getSetting('backup_frequency', 'weekly'));
+  const backupLastRunAt = getSetting('backup_last_run_at');
   res.render('settings', {
     appName: APP_NAME,
     displayTitle: getSetting('display_title', APP_NAME),
     departments: getDepartmentsWithCounts(),
-    currentTheme: getSetting('theme', 'dark')
+    currentTheme: getSetting('theme', 'dark'),
+    backupFrequency,
+    backupLastRunAt,
+    backupLastRunLabel: backupLastRunAt ? formatDate(backupLastRunAt) : '',
+    nextBackupLabel: backupLastRunAt ? formatDate(nextBackupTime(backupLastRunAt, backupFrequency)) : 'Next backup check',
+    backupFiles: listBackupArchives()
   });
 });
 
@@ -989,12 +1369,53 @@ app.post('/settings/theme', (req, res) => {
   redirectTo(req, res, '/settings');
 });
 
-app.get('/settings/export', (_req, res) => {
-  const backup = createBackupData();
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Content-Disposition', `attachment; filename="simple-issue-tracker-backup-${timestamp}.json"`);
-  res.send(JSON.stringify(backup, null, 2));
+app.post('/settings/backups/schedule', (req, res) => {
+  const backupFrequency = normalizeBackupFrequency(req.body.backup_frequency);
+  setSetting('backup_frequency', backupFrequency);
+  setFlash(req, 'success', 'Backup schedule saved.');
+  redirectTo(req, res, '/settings');
+});
+
+app.post('/settings/backups/run', async (req, res) => {
+  try {
+    const backup = await createStoredBackup('manual');
+    setFlash(req, 'success', `Backup created: ${backup.filename}`);
+  } catch (error) {
+    console.error(error);
+    setFlash(req, 'error', error.message || 'The backup could not be created.');
+  }
+  redirectTo(req, res, '/settings');
+});
+
+app.get('/settings/backups/:filename', (req, res) => {
+  const filePath = backupArchivePath(req.params.filename);
+  if (!filePath || !fs.existsSync(filePath)) {
+    res.status(404).send('Not found');
+    return;
+  }
+  res.download(filePath, path.basename(filePath));
+});
+
+app.get('/settings/export', async (req, res) => {
+  const tmpRoot = fs.mkdtempSync(path.join(TMP_DIR, 'download-'));
+  const filename = backupArchiveFilename('download');
+  const filePath = path.join(tmpRoot, filename);
+
+  try {
+    await createFullBackupArchive(filePath);
+    res.download(filePath, filename, (error) => {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+      if (error && !res.headersSent) {
+        setFlash(req, 'error', 'The backup could not be downloaded.');
+        redirectTo(req, res, '/settings');
+      }
+    });
+  } catch (error) {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    console.error(error);
+    setFlash(req, 'error', error.message || 'The backup could not be created.');
+    redirectTo(req, res, '/settings');
+  }
 });
 
 app.post('/settings/import', uploadMiddleware(backupUpload.single('backup'), '/settings'), (req, res) => {
@@ -1005,12 +1426,19 @@ app.post('/settings/import', uploadMiddleware(backupUpload.single('backup'), '/s
   }
 
   try {
-    const backup = JSON.parse(req.file.buffer.toString('utf8'));
-    restoreBackupData(backup);
-    setFlash(req, 'success', 'Backup imported.');
+    const extension = path.extname(req.file.originalname || req.file.filename || '').toLowerCase();
+    if (extension === '.json') {
+      const backup = JSON.parse(fs.readFileSync(req.file.path, 'utf8'));
+      restoreBackupData(backup);
+    } else {
+      restoreBackupArchive(req.file.path);
+    }
+    setFlash(req, 'success', 'Backup restored.');
   } catch (error) {
     console.error(error);
-    setFlash(req, 'error', error.message || 'The backup could not be imported.');
+    setFlash(req, 'error', error.message || 'The backup could not be restored.');
+  } finally {
+    fs.rm(req.file.path, { force: true }, () => {});
   }
   redirectTo(req, res, '/settings');
 });
@@ -1097,4 +1525,5 @@ app.use((error, _req, res, _next) => {
 
 app.listen(PORT, () => {
   console.log(`${APP_NAME} listening on port ${PORT}`);
+  startScheduledBackups();
 });

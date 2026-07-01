@@ -13,3 +13,4 @@ services:
       - ./storage/db:/data/db
       - ./storage/uploads:/data/uploads
       - ./storage/logo:/data/logo
+      - ./storage/backups:/data/backups

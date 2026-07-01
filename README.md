@@ -11,7 +11,8 @@ A simple self-hosted issue-and-resolution log for church production teams. It is
 - WYSIWYG issue and resolution editors with bold, italic, lists, and links
 - Screenshot/file attachments for images and PDFs
 - Settings for title, logo, departments, theme, and shared password
-- JSON backup export/import from Settings
+- Full zip backup export/import from Settings
+- Automatic daily, weekly, or monthly server backups
 - Footer with app version and branch metadata
 - SQLite database with first-run migrations and seeded departments
 - Docker Compose setup with persistent database, uploads, and logo storage
@@ -36,6 +37,7 @@ services:
       - ./storage/db:/data/db
       - ./storage/uploads:/data/uploads
       - ./storage/logo:/data/logo
+      - ./storage/backups:/data/backups
 ```
 
 Start it:
@@ -70,11 +72,12 @@ Docker Compose stores app data in local folders:
 ./storage/db       SQLite database
 ./storage/uploads  Uploaded screenshots/files
 ./storage/logo     Uploaded app logo
+./storage/backups  Scheduled full zip backups
 ```
 
-The app container uses `/data/db`, `/data/uploads`, and `/data/logo` internally.
+The app container uses `/data/db`, `/data/uploads`, `/data/logo`, and `/data/backups` internally.
 
-Settings also includes a JSON backup export/import tool. The backup contains database records, app settings, logo data, and uploaded attachments. Keep backup files private because they include the stored shared-password hash.
+Settings includes a full zip backup tool. The backup contains a SQLite snapshot, app settings, departments, issues, uploaded attachments, and logo files. Keep backup files private because they include the stored shared-password hash.
 
 ## Docker Compose Example
 
@@ -96,17 +99,41 @@ services:
       - ./storage/db:/data/db
       - ./storage/uploads:/data/uploads
       - ./storage/logo:/data/logo
+      - ./storage/backups:/data/backups
 ```
 
 ## Backups
 
-To back up the app, back up the whole `storage` folder:
+From **Settings > Full Backups**, you can:
+
+- Choose an automatic backup schedule: daily, weekly, or monthly
+- Download a fresh full backup zip
+- Create a stored server backup zip
+- Restore by uploading a Simple Issue Tracker backup zip
+
+Stored server backups are written to:
+
+```text
+./storage/backups
+```
+
+The backup zip includes:
+
+```text
+database/simple_issue_tracker.sqlite
+uploads/
+logo/
+manifest.json
+metadata/records.json
+```
+
+To back up the app outside the UI, back up the whole `storage` folder:
 
 ```bash
 tar -czf simple-issue-tracker-backup.tgz storage
 ```
 
-That includes the SQLite database, uploaded attachments, and logo. To restore, stop the container, replace the `storage` folder, then start it again.
+That includes the SQLite database, uploaded attachments, logo, and stored backup zips. To restore the whole folder manually, stop the container, replace the `storage` folder, then start it again.
 
 ```bash
 docker compose down

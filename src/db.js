@@ -9,9 +9,11 @@ const DATA_DIR = process.env.DATA_DIR || path.join(ROOT_DIR, 'data');
 const DB_DIR = path.join(DATA_DIR, 'db');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 const LOGO_DIR = path.join(DATA_DIR, 'logo');
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+const TMP_DIR = path.join(DATA_DIR, 'tmp');
 const DB_PATH = process.env.DB_PATH || path.join(DB_DIR, 'simple_issue_tracker.sqlite');
 
-for (const dir of [DB_DIR, UPLOAD_DIR, LOGO_DIR]) {
+for (const dir of [DB_DIR, UPLOAD_DIR, LOGO_DIR, BACKUP_DIR, TMP_DIR]) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
@@ -83,6 +85,10 @@ function seedDefaults() {
     setSetting('display_title', 'Simple Issue Tracker');
   }
 
+  if (!getSetting('backup_frequency')) {
+    setSetting('backup_frequency', 'weekly');
+  }
+
   const count = db.prepare('SELECT COUNT(*) AS count FROM departments').get().count;
   if (count === 0) {
     const timestamp = nowIso();
@@ -107,6 +113,8 @@ module.exports = {
   DB_DIR,
   UPLOAD_DIR,
   LOGO_DIR,
+  BACKUP_DIR,
+  TMP_DIR,
   getSetting,
   setSetting,
   nowIso

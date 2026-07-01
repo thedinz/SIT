@@ -1012,7 +1012,7 @@ function renderIssueForm(res, options) {
 app.use((req, res, next) => {
   res.locals.appName = APP_NAME;
   res.locals.displayTitle = getSetting('display_title', APP_NAME);
-  res.locals.assetVersion = '20260701-1';
+  res.locals.assetVersion = '20260701-2';
   res.locals.appVersion = APP_VERSION;
   res.locals.appBranch = APP_BRANCH;
   res.locals.appCommit = APP_COMMIT ? APP_COMMIT.slice(0, 7) : '';

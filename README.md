@@ -107,8 +107,8 @@ services:
 From **Settings > Full Backups**, you can:
 
 - Choose an automatic backup schedule: daily, weekly, or monthly
+- Click Backup Now to create a stored server backup zip
 - Download a fresh full backup zip
-- Create a stored server backup zip
 - Restore by uploading a Simple Issue Tracker backup zip
 
 Stored server backups are written to:

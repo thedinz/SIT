@@ -35,20 +35,6 @@
     </form>
   </section>
 
-  <section class="settings-card">
-    <h2>Theme</h2>
-    <form class="stack" method="post" action="<%= urlFor('/settings/theme') %>">
-      <div class="field">
-        <label for="theme">Default theme</label>
-        <select id="theme" name="theme">
-          <option value="dark" <%= currentTheme === 'dark' ? 'selected' : '' %>>Dark</option>
-          <option value="light" <%= currentTheme === 'light' ? 'selected' : '' %>>Light</option>
-        </select>
-      </div>
-      <button class="secondary-button" type="submit">Save Theme</button>
-    </form>
-  </section>
-
   <section class="settings-card wide-card">
     <h2>Full Backups</h2>
     <form class="backup-schedule" method="post" action="<%= urlFor('/settings/backups/schedule') %>">
@@ -69,10 +55,10 @@
     </div>
 
     <div class="backup-actions">
-      <a class="secondary-button" href="<%= urlFor('/settings/export') %>">Download Backup Now</a>
       <form method="post" action="<%= urlFor('/settings/backups/run') %>">
-        <button class="ghost-button" type="submit">Create Server Backup</button>
+        <button class="secondary-button" type="submit">Backup Now</button>
       </form>
+      <a class="ghost-button" href="<%= urlFor('/settings/export') %>">Download Fresh Zip</a>
     </div>
 
     <form class="stack" method="post" action="<%= urlFor('/settings/import') %>" enctype="multipart/form-data" data-confirm="Restoring a backup will replace the current database, settings, uploads, and logo. Continue?">
@@ -125,6 +111,20 @@
         </div>
       <% }) %>
     </div>
+  </section>
+
+  <section class="settings-card">
+    <h2>Theme</h2>
+    <form class="stack" method="post" action="<%= urlFor('/settings/theme') %>">
+      <div class="field">
+        <label for="theme">Default theme</label>
+        <select id="theme" name="theme">
+          <option value="dark" <%= currentTheme === 'dark' ? 'selected' : '' %>>Dark</option>
+          <option value="light" <%= currentTheme === 'light' ? 'selected' : '' %>>Light</option>
+        </select>
+      </div>
+      <button class="secondary-button" type="submit">Save Theme</button>
+    </form>
   </section>
 
   <section class="settings-card">

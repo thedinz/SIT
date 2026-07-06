@@ -42,6 +42,7 @@ const VALID_BACKUP_FREQUENCIES = new Set(['daily', 'weekly', 'monthly']);
 const BACKUP_FILENAME_PREFIX = 'simple-issue-tracker-backup-';
 const SCHEDULED_BACKUP_CHECK_MS = 60 * 60 * 1000;
 const SCHEDULED_BACKUP_RETENTION = 30;
+const ASSET_VERSION = '20260706-1';
 const allowedAttachmentTypes = new Map([
   ['image/jpeg', ['.jpg', '.jpeg']],
   ['image/png', ['.png']],
@@ -105,6 +106,16 @@ app.use((req, res, next) => {
 
 function normalizeFilename(filename) {
   return path.basename(filename || '').replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+function defaultSiteIconSvg() {
+  return `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect width="64" height="64" rx="14" fill="#101827"/>
+      <path d="M16 20h32v6H16zM16 30h24v6H16zM16 40h30v6H16z" fill="#7dd3fc"/>
+      <circle cx="47" cy="23" r="5" fill="#a7f3d0"/>
+    </svg>
+  `.trim();
 }
 
 function extensionForUpload(file, allowedTypes) {
@@ -1012,7 +1023,7 @@ function renderIssueForm(res, options) {
 app.use((req, res, next) => {
   res.locals.appName = APP_NAME;
   res.locals.displayTitle = getSetting('display_title', APP_NAME);
-  res.locals.assetVersion = '20260701-2';
+  res.locals.assetVersion = ASSET_VERSION;
   res.locals.appVersion = APP_VERSION;
   res.locals.appBranch = APP_BRANCH;
   res.locals.appCommit = APP_COMMIT ? APP_COMMIT.slice(0, 7) : '';
@@ -1024,6 +1035,7 @@ app.use((req, res, next) => {
   res.locals.theme = req.session.theme || getSetting('theme', 'dark');
   const logoFilename = getSetting('logo_filename');
   res.locals.logoUrl = logoFilename ? urlFor(req, `/logo/${encodeURIComponent(logoFilename)}`) : '';
+  res.locals.faviconUrl = urlFor(req, `/site-icon?v=${encodeURIComponent(logoFilename || ASSET_VERSION)}`);
   next();
 });
 
@@ -1070,6 +1082,20 @@ app.get('/logo/:filename', (req, res) => {
     return;
   }
   res.sendFile(path.join(LOGO_DIR, filename));
+});
+
+app.get(['/site-icon', '/favicon.ico'], (_req, res) => {
+  const configuredLogo = getSetting('logo_filename');
+  if (configuredLogo) {
+    const filename = normalizeFilename(configuredLogo);
+    const logoPath = path.join(LOGO_DIR, filename);
+    if (filename && isPathInside(LOGO_DIR, logoPath) && fs.existsSync(logoPath)) {
+      res.sendFile(logoPath);
+      return;
+    }
+  }
+
+  res.type('image/svg+xml').send(defaultSiteIconSvg());
 });
 
 app.use(requireAuth);

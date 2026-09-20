@@ -42,7 +42,7 @@ const VALID_BACKUP_FREQUENCIES = new Set(['daily', 'weekly', 'monthly']);
 const BACKUP_FILENAME_PREFIX = 'simple-issue-tracker-backup-';
 const SCHEDULED_BACKUP_CHECK_MS = 60 * 60 * 1000;
 const SCHEDULED_BACKUP_RETENTION = 30;
-const ASSET_VERSION = '20260706-1';
+const ASSET_VERSION = '20260920-1';
 const allowedAttachmentTypes = new Map([
   ['image/jpeg', ['.jpg', '.jpeg']],
   ['image/png', ['.png']],
@@ -1190,6 +1190,32 @@ app.get('/', (req, res) => {
       totalPages,
       pageUrl
     }
+  });
+});
+
+app.get('/files', (_req, res) => {
+  const groups = new Map(getDepartments().map((department) => [
+    department.id, { ...department, files: [] }
+  ]));
+  const files = db.prepare(`
+    SELECT a.*, idp.department_id
+    FROM attachments a
+    JOIN issues i ON i.id = a.issue_id
+    LEFT JOIN issue_departments idp ON idp.issue_id = i.id
+    ORDER BY a.uploaded_at DESC, a.id DESC
+  `).all();
+
+  for (const file of files) {
+    if (!groups.has(file.department_id)) {
+      groups.set(file.department_id, { id: 'unassigned', name: 'No department', files: [] });
+    }
+    groups.get(file.department_id).files.push(file);
+  }
+
+  res.render('files', {
+    departments: [...groups.values()],
+    fileCount: new Set(files.map((file) => file.id)).size,
+    formatBytes
   });
 });
 

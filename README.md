@@ -10,6 +10,7 @@ A simple self-hosted issue-and-resolution log for church production teams. It is
 - Submitter name, multi-department issue tagging, and pending/resolved status
 - WYSIWYG issue and resolution editors with bold, italic, lists, and links
 - Screenshot/file attachments for images and PDFs
+- Files page with issue attachments grouped by department
 - Settings for title, logo, departments, theme, and shared password
 - Full zip backup export/import from Settings
 - Automatic daily, weekly, or monthly server backups

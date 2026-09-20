@@ -1,0 +1,45 @@
+<%- include('partials/top', { title: 'Files' }) %>
+
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Issue attachments</p>
+    <h1>Files</h1>
+    <p class="meta-line"><%= fileCount %> <%= fileCount === 1 ? 'file' : 'files' %> organized by department. Files from shared issues appear in each selected department.</p>
+  </div>
+  <a class="primary-button compact" href="<%= urlFor('/issues/new') %>">Add Issue</a>
+</section>
+
+<% if (fileCount === 0) { %>
+  <section class="empty-state">
+    <h2>No files yet</h2>
+    <p>Upload images or PDFs when adding or editing an issue. They will appear here under the issue's departments.</p>
+  </section>
+<% } else { %>
+  <div class="stack">
+    <% departments.forEach((department) => { %>
+      <section class="settings-card" aria-labelledby="department-<%= department.id %>">
+        <div class="files-department-heading">
+          <h2 id="department-<%= department.id %>"><%= department.name %></h2>
+          <span class="muted"><%= department.files.length %> <%= department.files.length === 1 ? 'file' : 'files' %></span>
+        </div>
+        <% if (department.files.length === 0) { %>
+          <p class="muted">No files in this department yet.</p>
+        <% } else { %>
+          <ul class="files-list">
+            <% department.files.forEach((file) => { %>
+              <li class="file-row">
+                <div class="file-details">
+                  <a class="file-link" href="<%= urlFor(`/uploads/${encodeURIComponent(file.filename)}`) %>" target="_blank" rel="noopener noreferrer"><%= file.original_filename %></a>
+                  <span class="muted"><%= file.mime_type === 'application/pdf' ? 'PDF' : 'Image' %> &middot; <%= formatBytes(file.size) %> &middot; Uploaded <%= formatDate(file.uploaded_at) %></span>
+                </div>
+                <a class="secondary-button compact" href="<%= urlFor(`/issues/${file.issue_id}/edit`) %>">Issue #<%= file.issue_id %></a>
+              </li>
+            <% }) %>
+          </ul>
+        <% } %>
+      </section>
+    <% }) %>
+  </div>
+<% } %>
+
+<%- include('partials/bottom') %>

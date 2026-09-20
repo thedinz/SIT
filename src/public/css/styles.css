@@ -641,6 +641,48 @@ select:focus,
   font-weight: 750;
 }
 
+.files-department-heading,
+.file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.files-department-heading h2 {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.files-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.file-row {
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+
+.file-details {
+  display: grid;
+  gap: 6px;
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.file-details .muted {
+  font-size: 0.84rem;
+}
+
+.file-link {
+  color: var(--accent);
+  font-weight: 750;
+}
+
 .attachment-strip {
   display: flex;
   flex-wrap: wrap;

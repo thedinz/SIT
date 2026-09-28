@@ -26,7 +26,10 @@
           <a class="<%= currentPath === '/files' ? 'active' : '' %>" href="<%= urlFor('/files') %>" <%- currentPath === '/files' ? 'aria-current="page"' : '' %>>Files</a>
           <a class="<%= currentPath === '/settings' ? 'active' : '' %>" href="<%= urlFor('/settings') %>">Settings</a>
           <button class="theme-toggle" type="button" data-theme-toggle aria-label="Toggle theme">Theme</button>
-          <a class="logout-link" href="<%= urlFor('/logout') %>">Logout</a>
+          <form class="logout-form" method="post" action="<%= urlFor('/logout') %>">
+            <%- include('csrf') %>
+            <button class="logout-link" type="submit">Logout</button>
+          </form>
         </nav>
       </header>
     <% } %>

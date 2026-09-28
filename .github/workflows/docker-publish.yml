@@ -17,7 +17,30 @@ env:
   IMAGE_NAME: ghcr.io/thedinz/sit
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check
+        run: npm run check
+
+      - name: Run tests
+        run: npm test
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
 
     steps:
@@ -53,6 +76,39 @@ jobs:
           labels: |
             org.opencontainers.image.title=Simple Issue Tracker
             org.opencontainers.image.description=Self-hosted issue-and-resolution log for church production teams.
+
+      - name: Build image for smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: sit:smoke-test
+
+      - name: Smoke test container
+        run: |
+          # Root-owned bind mounts, like an existing install, to exercise the entrypoint's ownership fix.
+          sudo mkdir -p smoke/db smoke/uploads smoke/logo smoke/backups
+          docker run -d --name sit-smoke -p 3999:3000 \
+            -v "$PWD/smoke/db:/data/db" \
+            -v "$PWD/smoke/uploads:/data/uploads" \
+            -v "$PWD/smoke/logo:/data/logo" \
+            -v "$PWD/smoke/backups:/data/backups" \
+            sit:smoke-test
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3999/healthz; then
+              echo
+              docker logs sit-smoke
+              app_uid="$(docker exec sit-smoke sh -c 'stat -c %u /proc/1')"
+              echo "App process uid: $app_uid"
+              test "$app_uid" != "0"
+              test -n "$(sudo ls smoke/db)"
+              docker rm -f sit-smoke
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs sit-smoke
+          exit 1
 
       - name: Build and push
         uses: docker/build-push-action@v6

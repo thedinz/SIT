@@ -30,7 +30,7 @@
               <li class="file-row">
                 <div class="file-details">
                   <a class="file-link" href="<%= urlFor(`/uploads/${encodeURIComponent(file.filename)}`) %>" target="_blank" rel="noopener noreferrer"><%= file.original_filename %></a>
-                  <span class="muted"><%= file.mime_type === 'application/pdf' ? 'PDF' : 'Image' %> &middot; <%= formatBytes(file.size) %> &middot; Uploaded <%= formatDate(file.uploaded_at) %></span>
+                  <span class="muted"><%= file.mime_type === 'application/pdf' ? 'PDF' : 'Image' %> &middot; <%= formatBytes(file.size) %> &middot; Uploaded <%- localTime(file.uploaded_at) %></span>
                 </div>
                 <a class="secondary-button compact" href="<%= urlFor(`/issues/${file.issue_id}/edit`) %>">Issue #<%= file.issue_id %></a>
               </li>

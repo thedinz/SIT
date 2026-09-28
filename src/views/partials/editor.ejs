@@ -1,4 +1,4 @@
-<div class="editor" data-editor>
+<div class="editor" data-editor <%= typeof required !== 'undefined' && required ? 'data-editor-required' : '' %> data-editor-label="<%= label %>">
   <div class="editor-toolbar" aria-label="<%= label %> formatting">
     <button type="button" data-command="bold" aria-label="Bold"><strong>B</strong></button>
     <button type="button" data-command="italic" aria-label="Italic"><em>I</em></button>
@@ -6,6 +6,6 @@
     <button type="button" data-command="insertOrderedList" aria-label="Numbered list">1.</button>
     <button type="button" data-command="createLink" aria-label="Add link">Link</button>
   </div>
-  <div class="editor-surface rich-text" contenteditable="true" data-editor-surface data-target="<%= name %>" data-placeholder="<%= placeholder %>"><%- value || '' %></div>
+  <div class="editor-surface rich-text" contenteditable="true" role="textbox" aria-multiline="true" aria-label="<%= label %>" data-editor-surface data-target="<%= name %>" data-placeholder="<%= placeholder %>"><%- value || '' %></div>
   <input type="hidden" name="<%= name %>" value="">
 </div>

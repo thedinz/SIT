@@ -57,17 +57,17 @@
       <article class="issue-card">
         <section class="date-cell">
           <span class="status-pill status-<%= issue.status === 'resolved' ? 'resolved' : 'pending' %>"><%= issue.status === 'resolved' ? 'Resolved' : 'Pending' %></span>
-          <span class="date-text"><%= formatDate(issue.created_at) %></span>
+          <span class="date-text"><%- localTime(issue.created_at) %></span>
           <% if (issue.poster_name) { %>
             <span class="submitted-by">By <%= issue.poster_name %></span>
           <% } %>
           <div class="department-stack">
-            <% String(issue.department_names || '').split(', ').filter(Boolean).forEach((departmentName) => { %>
+            <% issue.department_list.forEach((departmentName) => { %>
               <span class="department-pill"><%= departmentName %></span>
             <% }) %>
           </div>
           <% if (issue.updated_at !== issue.created_at) { %>
-            <span class="updated-text">Updated <%= formatDate(issue.updated_at) %></span>
+            <span class="updated-text">Updated <%- localTime(issue.updated_at) %></span>
           <% } %>
         </section>
         <section class="log-cell issue-cell">

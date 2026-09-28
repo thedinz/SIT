@@ -14,6 +14,7 @@
   </div>
 
   <form method="post" action="<%= urlFor('/login') %>" class="stack login-form" data-login-form>
+    <%- include('partials/csrf') %>
     <div class="field">
       <label for="password">Password</label>
       <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>

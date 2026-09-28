@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const Database = require('better-sqlite3');
 const bcrypt = require('bcryptjs');
+const { searchTextFromHtml } = require('./sanitize');
 
 const ROOT_DIR = path.join(__dirname, '..');
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT_DIR, 'data');
@@ -12,6 +13,7 @@ const LOGO_DIR = path.join(DATA_DIR, 'logo');
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const TMP_DIR = path.join(DATA_DIR, 'tmp');
 const DB_PATH = process.env.DB_PATH || path.join(DB_DIR, 'simple_issue_tracker.sqlite');
+const DEFAULT_PASSWORD = 'admin';
 
 for (const dir of [DB_DIR, UPLOAD_DIR, LOGO_DIR, BACKUP_DIR, TMP_DIR]) {
   fs.mkdirSync(dir, { recursive: true });
@@ -68,13 +70,31 @@ function setSetting(key, value) {
   `).run(key, value);
 }
 
+function issueSearchText(issueHtml, resolutionHtml) {
+  return `${searchTextFromHtml(issueHtml)}\n${searchTextFromHtml(resolutionHtml)}`.trim();
+}
+
+function refreshDefaultPasswordFlag() {
+  const hash = getSetting('password_hash');
+  setSetting('password_is_default', hash && bcrypt.compareSync(DEFAULT_PASSWORD, hash) ? '1' : '0');
+}
+
 function seedDefaults() {
   if (!getSetting('password_hash')) {
-    setSetting('password_hash', bcrypt.hashSync('admin', 12));
+    setSetting('password_hash', bcrypt.hashSync(DEFAULT_PASSWORD, 12));
+    setSetting('password_is_default', '1');
+  }
+
+  if (!getSetting('password_is_default')) {
+    refreshDefaultPasswordFlag();
   }
 
   if (!getSetting('session_secret')) {
     setSetting('session_secret', crypto.randomBytes(32).toString('hex'));
+  }
+
+  if (!getSetting('session_version')) {
+    setSetting('session_version', '1');
   }
 
   if (!getSetting('theme')) {
@@ -103,8 +123,25 @@ function seedDefaults() {
   }
 }
 
+function backfillSearchText() {
+  const rows = db
+    .prepare("SELECT id, issue_html, resolution_html FROM issues WHERE search_text = ''")
+    .all();
+  if (rows.length === 0) {
+    return;
+  }
+
+  const update = db.prepare('UPDATE issues SET search_text = ? WHERE id = ?');
+  db.transaction(() => {
+    for (const row of rows) {
+      update.run(issueSearchText(row.issue_html, row.resolution_html), row.id);
+    }
+  })();
+}
+
 runMigrations();
 seedDefaults();
+backfillSearchText();
 
 module.exports = {
   db,
@@ -115,7 +152,10 @@ module.exports = {
   LOGO_DIR,
   BACKUP_DIR,
   TMP_DIR,
+  DEFAULT_PASSWORD,
   getSetting,
   setSetting,
-  nowIso
+  nowIso,
+  issueSearchText,
+  refreshDefaultPasswordFlag
 };

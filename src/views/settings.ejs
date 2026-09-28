@@ -7,10 +7,35 @@
   </div>
 </section>
 
+<% if (passwordIsDefault) { %>
+  <section class="notice notice-warning" role="alert">
+    <strong>Change the default password.</strong>
+    <span>This tracker still uses the default password <code>admin</code>. Choose a new shared password below before using the tracker. You can also restore a backup first if you are moving from another server.</span>
+  </section>
+<% } %>
+
 <div class="settings-grid">
+  <section class="settings-card<%= passwordIsDefault ? ' highlighted-card' : '' %>" id="password-settings">
+    <h2>Password</h2>
+    <form class="stack" method="post" action="<%= urlFor('/settings/password') %>">
+      <%- include('partials/csrf') %>
+      <div class="field">
+        <label for="password">New password</label>
+        <input id="password" name="password" type="password" autocomplete="new-password" minlength="<%= minPasswordLength %>" required <%= passwordIsDefault ? 'autofocus' : '' %>>
+        <p class="field-hint">At least <%= minPasswordLength %> characters. Changing it signs out every other device.</p>
+      </div>
+      <div class="field">
+        <label for="confirm_password">Confirm password</label>
+        <input id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" minlength="<%= minPasswordLength %>" required>
+      </div>
+      <button class="secondary-button" type="submit">Change Password</button>
+    </form>
+  </section>
+
   <section class="settings-card">
     <h2>Title</h2>
     <form class="stack" method="post" action="<%= urlFor('/settings/title') %>">
+      <%- include('partials/csrf') %>
       <div class="field">
         <label for="display_title">Display title</label>
         <input id="display_title" name="display_title" type="text" value="<%= displayTitle %>" maxlength="80" required>
@@ -27,6 +52,7 @@
       <p class="muted">No logo uploaded.</p>
     <% } %>
     <form class="stack" method="post" action="<%= urlFor('/settings/logo') %>" enctype="multipart/form-data">
+      <%- include('partials/csrf') %>
       <div class="field">
         <label for="logo">Logo image</label>
         <input id="logo" name="logo" type="file" accept="image/jpeg,image/png,image/gif,image/webp" required>
@@ -35,9 +61,26 @@
     </form>
   </section>
 
+  <section class="settings-card">
+    <h2>Theme</h2>
+    <form class="stack" method="post" action="<%= urlFor('/settings/theme') %>">
+      <%- include('partials/csrf') %>
+      <div class="field">
+        <label for="theme">Default theme</label>
+        <select id="theme" name="theme">
+          <option value="dark" <%= currentTheme === 'dark' ? 'selected' : '' %>>Dark</option>
+          <option value="light" <%= currentTheme === 'light' ? 'selected' : '' %>>Light</option>
+        </select>
+        <p class="field-hint">Used on devices that haven't picked a theme with the Theme button.</p>
+      </div>
+      <button class="secondary-button" type="submit">Save Theme</button>
+    </form>
+  </section>
+
   <section class="settings-card wide-card">
     <h2>Full Backups</h2>
     <form class="backup-schedule" method="post" action="<%= urlFor('/settings/backups/schedule') %>">
+      <%- include('partials/csrf') %>
       <div class="field">
         <label for="backup_frequency">Automatic backup schedule</label>
         <select id="backup_frequency" name="backup_frequency">
@@ -50,21 +93,27 @@
     </form>
 
     <div class="backup-meta">
-      <span>Last run: <strong><%= backupLastRunLabel || 'Not yet' %></strong></span>
-      <span>Next due: <strong><%= nextBackupLabel %></strong></span>
+      <span>Last run: <strong><%- backupLastRunAt ? localTime(backupLastRunAt) : 'Not yet' %></strong></span>
+      <span>Next due: <strong><%- nextBackupAt ? localTime(nextBackupAt) : 'Within the hour' %></strong></span>
     </div>
 
     <div class="backup-actions">
       <form method="post" action="<%= urlFor('/settings/backups/run') %>">
+        <%- include('partials/csrf') %>
         <button class="secondary-button" type="submit">Backup Now</button>
       </form>
-      <a class="ghost-button" href="<%= urlFor('/settings/export') %>">Download Fresh Zip</a>
+      <form method="post" action="<%= urlFor('/settings/export') %>">
+        <%- include('partials/csrf') %>
+        <button class="ghost-button" type="submit">Download Fresh Zip</button>
+      </form>
     </div>
 
-    <form class="stack" method="post" action="<%= urlFor('/settings/import') %>" enctype="multipart/form-data" data-confirm="Restoring a backup will replace the current database, settings, uploads, and logo. Continue?">
+    <form class="stack" method="post" action="<%= urlFor('/settings/import') %>" enctype="multipart/form-data" data-confirm="Restoring a backup will replace the current database, settings, uploads, and logo. A copy of the current data is saved first. Continue?">
+      <%- include('partials/csrf') %>
       <div class="field">
         <label for="backup">Restore backup</label>
         <input id="backup" name="backup" type="file" accept="application/zip,.zip,application/json,.json" required>
+        <p class="field-hint">The current data is saved as a "Before restore" backup first, so a restore can be undone.</p>
       </div>
       <button class="danger-button" type="submit">Restore Backup</button>
     </form>
@@ -74,13 +123,20 @@
       <% if (backupFiles.length === 0) { %>
         <p class="muted">No stored backups yet.</p>
       <% } else { %>
-        <% backupFiles.slice(0, 8).forEach((backup) => { %>
+        <p class="field-hint">Scheduled backups keep the newest 30 and "Before restore" backups keep the newest 5. Manual backups stay until you delete them.</p>
+        <% backupFiles.forEach((backup) => { %>
           <div class="backup-row">
             <div>
-              <strong><%= backup.createdAtLabel %></strong>
-              <span><%= backup.formattedSize %></span>
+              <strong><%- localTime(backup.createdAt) %></strong>
+              <span><%= backup.kind %> · <%= backup.formattedSize %></span>
             </div>
-            <a class="ghost-button compact" href="<%= urlFor(`/settings/backups/${encodeURIComponent(backup.filename)}`) %>">Download</a>
+            <div class="backup-row-actions">
+              <a class="ghost-button compact" href="<%= urlFor(`/settings/backups/${encodeURIComponent(backup.filename)}`) %>">Download</a>
+              <form method="post" action="<%= urlFor(`/settings/backups/${encodeURIComponent(backup.filename)}/delete`) %>" data-confirm="Delete this stored backup?">
+                <%- include('partials/csrf') %>
+                <button class="danger-button compact" type="submit">Delete</button>
+              </form>
+            </div>
           </div>
         <% }) %>
       <% } %>
@@ -90,6 +146,7 @@
   <section class="settings-card wide-card">
     <h2>Departments</h2>
     <form class="add-row" method="post" action="<%= urlFor('/settings/departments') %>">
+      <%- include('partials/csrf') %>
       <div class="field">
         <label for="department-name">Add department</label>
         <input id="department-name" name="name" type="text" maxlength="80" required>
@@ -101,45 +158,18 @@
       <% departments.forEach((department) => { %>
         <div class="department-row">
           <form method="post" action="<%= urlFor(`/settings/departments/${department.id}`) %>">
-            <input name="name" type="text" value="<%= department.name %>" maxlength="80" required>
+            <%- include('partials/csrf') %>
+            <input name="name" type="text" value="<%= department.name %>" maxlength="80" required aria-label="Department name">
             <button class="ghost-button compact" type="submit">Rename</button>
           </form>
           <form method="post" action="<%= urlFor(`/settings/departments/${department.id}/delete`) %>" data-confirm="Delete this department?">
+            <%- include('partials/csrf') %>
             <span class="usage-count"><%= department.issue_count %> used</span>
             <button class="danger-button compact" type="submit" <%= department.issue_count > 0 ? 'disabled' : '' %>>Delete</button>
           </form>
         </div>
       <% }) %>
     </div>
-  </section>
-
-  <section class="settings-card">
-    <h2>Theme</h2>
-    <form class="stack" method="post" action="<%= urlFor('/settings/theme') %>">
-      <div class="field">
-        <label for="theme">Default theme</label>
-        <select id="theme" name="theme">
-          <option value="dark" <%= currentTheme === 'dark' ? 'selected' : '' %>>Dark</option>
-          <option value="light" <%= currentTheme === 'light' ? 'selected' : '' %>>Light</option>
-        </select>
-      </div>
-      <button class="secondary-button" type="submit">Save Theme</button>
-    </form>
-  </section>
-
-  <section class="settings-card">
-    <h2>Password</h2>
-    <form class="stack" method="post" action="<%= urlFor('/settings/password') %>">
-      <div class="field">
-        <label for="password">New password</label>
-        <input id="password" name="password" type="password" autocomplete="new-password" required>
-      </div>
-      <div class="field">
-        <label for="confirm_password">Confirm password</label>
-        <input id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" required>
-      </div>
-      <button class="secondary-button" type="submit">Change Password</button>
-    </form>
   </section>
 </div>
 

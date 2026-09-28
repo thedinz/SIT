@@ -5,13 +5,20 @@
     <p class="eyebrow"><%= mode === 'create' ? 'New log entry' : `Entry #${issue.id}` %></p>
     <h1><%= title %></h1>
     <% if (mode === 'edit') { %>
-      <p class="meta-line">Submitted <%= formatDate(issue.created_at) %> · Updated <%= formatDate(issue.updated_at) %></p>
+      <p class="meta-line">Submitted <%- localTime(issue.created_at) %> · Updated <%- localTime(issue.updated_at) %></p>
     <% } %>
   </div>
   <a class="ghost-button compact" href="<%= urlFor('/') %>">Back</a>
 </section>
 
-<form class="form-card stack" method="post" action="<%= urlFor(action) %>" enctype="multipart/form-data" data-editor-form>
+<form class="form-card stack" method="post" action="<%= urlFor(action) %>" enctype="multipart/form-data" data-editor-form data-max-files="12" data-max-file-size="10485760">
+  <%- include('partials/csrf') %>
+  <% if (mode === 'edit') { %>
+    <input type="hidden" name="base_updated_at" value="<%= issue.updated_at %>">
+  <% } %>
+
+  <div class="form-error" role="alert" data-form-error hidden></div>
+
   <div class="field">
     <label for="poster_name">Name</label>
     <input id="poster_name" name="poster_name" type="text" value="<%= issue.poster_name || '' %>" maxlength="120" autocomplete="name" required>
@@ -25,7 +32,7 @@
     </select>
   </div>
 
-  <fieldset class="checkbox-panel">
+  <fieldset class="checkbox-panel" data-department-group>
     <legend>Departments</legend>
     <div class="checkbox-grid">
       <% departments.forEach((department) => { %>
@@ -43,7 +50,8 @@
       label: 'Issue',
       name: 'issue_html',
       value: issue.issue_html,
-      placeholder: 'Describe what happened'
+      placeholder: 'Describe what happened',
+      required: true
     }) %>
   </div>
 
@@ -81,7 +89,9 @@
 
   <div class="field">
     <label for="attachments">Add files</label>
-    <input id="attachments" name="attachments" type="file" multiple accept="image/jpeg,image/png,image/gif,image/webp,application/pdf">
+    <input id="attachments" name="attachments" type="file" multiple accept="image/jpeg,image/png,image/gif,image/webp,application/pdf" data-attachment-input>
+    <p class="field-hint">Images or PDFs, up to 12 files of 10 MB each. You can also paste a screenshot straight into the Issue or Resolution box.</p>
+    <ul class="selected-files" data-attachment-list hidden></ul>
   </div>
 
   <div class="form-actions">
@@ -89,5 +99,12 @@
     <a class="ghost-button" href="<%= urlFor('/') %>">Cancel</a>
   </div>
 </form>
+
+<% if (mode === 'edit') { %>
+  <form class="danger-zone" method="post" action="<%= urlFor(`/issues/${issue.id}/delete`) %>" data-confirm="Delete this issue and its attachments? This cannot be undone.">
+    <%- include('partials/csrf') %>
+    <button class="danger-button compact" type="submit">Delete Issue</button>
+  </form>
+<% } %>
 
 <%- include('partials/bottom') %>

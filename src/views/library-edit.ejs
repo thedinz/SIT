@@ -1,0 +1,54 @@
+<%- include('partials/top', { title: `Edit ${file.title}` }) %>
+
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Library file</p>
+    <h1>Edit File</h1>
+    <p class="meta-line"><%= file.original_filename %> &middot; <%= formatBytes(file.size) %> &middot; Added <%- localTime(file.created_at) %></p>
+  </div>
+  <a class="ghost-button compact" href="<%= urlFor(`/library/${file.id}`) %>">Back</a>
+</section>
+
+<form class="form-card stack" method="post" action="<%= urlFor(`/library/${file.id}`) %>" enctype="multipart/form-data" data-library-form data-max-files="1" data-max-file-size="<%= maxFileSize %>" data-accept="<%= acceptList %>">
+  <%- include('partials/csrf') %>
+  <div class="form-error" role="alert" data-form-error hidden></div>
+
+  <div class="field">
+    <label for="title">Name</label>
+    <input id="title" name="title" type="text" value="<%= file.title %>" maxlength="160" required>
+  </div>
+
+  <div class="field">
+    <label for="department_id">Department</label>
+    <select id="department_id" name="department_id">
+      <option value="">General (all teams)</option>
+      <% departments.forEach((department) => { %>
+        <option value="<%= department.id %>" <%= file.department_id === department.id ? 'selected' : '' %>><%= department.name %></option>
+      <% }) %>
+    </select>
+  </div>
+
+  <div class="field">
+    <label for="description">Description <span class="optional">(optional)</span></label>
+    <input id="description" name="description" type="text" value="<%= file.description %>" maxlength="500">
+  </div>
+
+  <div class="field">
+    <label for="replacement">Replace with a new version <span class="optional">(optional)</span></label>
+    <input id="replacement" name="file" type="file" accept="<%= acceptList %>" data-attachment-input>
+    <p class="field-hint">The link stays the same, so anyone who bookmarked this file gets the new version. Up to <%= formatBytes(maxFileSize) %>.</p>
+    <ul class="selected-files" data-attachment-list hidden></ul>
+  </div>
+
+  <div class="form-actions">
+    <button class="primary-button" type="submit">Save Changes</button>
+    <a class="ghost-button" href="<%= urlFor(`/library/${file.id}`) %>">Cancel</a>
+  </div>
+</form>
+
+<form class="danger-zone" method="post" action="<%= urlFor(`/library/${file.id}/delete`) %>" data-confirm="Remove this file from the Library? This cannot be undone.">
+  <%- include('partials/csrf') %>
+  <button class="danger-button compact" type="submit">Delete File</button>
+</form>
+
+<%- include('partials/bottom') %>

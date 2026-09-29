@@ -1,0 +1,108 @@
+<%- include('partials/top', { title: 'Library' }) %>
+
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Team documents</p>
+    <h1>Library</h1>
+    <p class="meta-line">Files every team keeps on hand, like stage plots, input lists, checklists, and manuals. These stay here whether or not an issue is open.</p>
+  </div>
+  <a class="primary-button compact" href="#upload">Upload Files</a>
+</section>
+
+<details class="settings-card upload-panel" id="upload" <%= totalCount === 0 ? 'open' : '' %>>
+  <summary><h2>Upload files</h2></summary>
+  <form class="stack" method="post" action="<%= urlFor('/library') %>" enctype="multipart/form-data" data-library-form data-max-files="<%= maxFiles %>" data-max-file-size="<%= maxFileSize %>" data-accept="<%= acceptList %>">
+    <%- include('partials/csrf') %>
+    <div class="form-error" role="alert" data-form-error hidden></div>
+    <div class="field">
+      <label for="library-files">Files</label>
+      <input id="library-files" name="files" type="file" multiple required accept="<%= acceptList %>" data-attachment-input>
+      <p class="field-hint">Word, Excel, PowerPoint, PDF, images, or text files. Up to <%= maxFiles %> files of <%= formatBytes(maxFileSize) %> each.</p>
+      <ul class="selected-files" data-attachment-list hidden></ul>
+    </div>
+    <div class="upload-grid">
+      <div class="field">
+        <label for="library-department">Department</label>
+        <select id="library-department" name="department_id">
+          <option value="">General (all teams)</option>
+          <% departments.forEach((department) => { %>
+            <option value="<%= department.id %>"><%= department.name %></option>
+          <% }) %>
+        </select>
+      </div>
+      <div class="field">
+        <label for="library-description">Description <span class="optional">(optional)</span></label>
+        <input id="library-description" name="description" type="text" maxlength="500" placeholder="e.g. Current stage plot for Sunday services">
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="primary-button" type="submit">Upload to Library</button>
+    </div>
+  </form>
+</details>
+
+<% if (totalCount > 0) { %>
+  <form class="control-bar library-controls" method="get" action="<%= urlFor('/library') %>">
+    <div class="field search-field">
+      <label for="q">Search</label>
+      <input id="q" name="q" type="search" value="<%= filters.q %>" placeholder="Search names and descriptions">
+    </div>
+    <div class="field">
+      <label for="department">Department</label>
+      <select id="department" name="department">
+        <option value="all">All</option>
+        <option value="general" <%= filters.department === 'general' ? 'selected' : '' %>>General</option>
+        <% departments.forEach((department) => { %>
+          <option value="<%= department.id %>" <%= filters.department === String(department.id) ? 'selected' : '' %>><%= department.name %></option>
+        <% }) %>
+      </select>
+    </div>
+    <div class="control-actions">
+      <button class="secondary-button" type="submit">Apply</button>
+      <a class="ghost-button" href="<%= urlFor('/library') %>">Clear</a>
+    </div>
+  </form>
+<% } %>
+
+<% if (totalCount === 0) { %>
+  <section class="empty-state">
+    <h2>The Library is empty</h2>
+    <p>Upload documents your teams need to find quickly. Anyone signed in can open them right in the browser.</p>
+  </section>
+<% } else if (fileCount === 0) { %>
+  <section class="empty-state">
+    <h2>No matching files</h2>
+    <p>Try a different search or department.</p>
+  </section>
+<% } else { %>
+  <div class="stack">
+    <% groups.forEach((group) => { %>
+      <section class="settings-card" aria-labelledby="library-group-<%= group.key %>">
+        <div class="files-department-heading">
+          <h2 id="library-group-<%= group.key %>"><%= group.name %></h2>
+          <span class="muted"><%= group.files.length %> <%= group.files.length === 1 ? 'file' : 'files' %></span>
+        </div>
+        <ul class="files-list">
+          <% group.files.forEach((file) => { %>
+            <li class="file-row library-row">
+              <a class="file-badge file-badge-<%= file.badgeFamily %>" href="<%= urlFor(`/library/${file.id}`) %>" aria-hidden="true" tabindex="-1"><%= file.extension %></a>
+              <div class="file-details">
+                <a class="file-link" href="<%= urlFor(`/library/${file.id}`) %>"><%= file.title %></a>
+                <% if (file.description) { %>
+                  <span class="library-description"><%= file.description %></span>
+                <% } %>
+                <span class="muted"><%= file.typeLabel %> &middot; <%= formatBytes(file.size) %> &middot; Updated <%- localTime(file.updated_at) %></span>
+              </div>
+              <div class="backup-row-actions">
+                <a class="secondary-button compact" href="<%= urlFor(`/library/${file.id}`) %>">Open</a>
+                <a class="ghost-button compact" href="<%= urlFor(`/library/${file.id}/file?download=1`) %>">Download</a>
+              </div>
+            </li>
+          <% }) %>
+        </ul>
+      </section>
+    <% }) %>
+  </div>
+<% } %>
+
+<%- include('partials/bottom') %>

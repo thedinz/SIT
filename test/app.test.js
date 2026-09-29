@@ -7,6 +7,8 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const bcrypt = require('bcryptjs');
 const yauzl = require('yauzl');
+const yazl = require('yazl');
+const XLSX = require('xlsx');
 
 const ROOT = path.join(__dirname, '..');
 const PNG = Buffer.from(
@@ -147,6 +149,49 @@ function readZip(zipPath) {
       zipFile.readEntry();
     });
   });
+}
+
+function buildDocx(bodyXml) {
+  const zip = new yazl.ZipFile();
+  zip.addBuffer(Buffer.from(
+    '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+    + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+    + '<Default Extension="xml" ContentType="application/xml"/>'
+    + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+    + '</Types>'
+  ), '[Content_Types].xml');
+  zip.addBuffer(Buffer.from(
+    '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+    + '</Relationships>'
+  ), '_rels/.rels');
+  zip.addBuffer(Buffer.from(
+    '<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+    + `<w:body>${bodyXml}</w:body></w:document>`
+  ), 'word/document.xml');
+  zip.end();
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    zip.outputStream.on('data', (chunk) => chunks.push(chunk));
+    zip.outputStream.on('end', () => resolve(Buffer.concat(chunks)));
+    zip.outputStream.on('error', reject);
+  });
+}
+
+function buildXlsx() {
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Channel', 'Source'], [1, 'Kick <script>alert(1)</script>']]), 'Inputs');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Mix', 'Wedge'], ['Monitor 1', 'Stage left']]), 'Monitors');
+  return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+}
+
+function libraryRows() {
+  const database = liveDb();
+  try {
+    return database.prepare('SELECT * FROM library_files ORDER BY id').all();
+  } finally {
+    database.close();
+  }
 }
 
 async function dashboard(client, query = '') {
@@ -335,6 +380,103 @@ test('saving over someone else\'s newer edit is caught', async () => {
   database.close();
 });
 
+const libraryIds = {};
+
+test('library files upload and open in the browser', async () => {
+  const docx = await buildDocx(
+    '<w:p><w:r><w:t>Downstage center</w:t></w:r></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Mic 1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Pulpit</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
+  );
+  const response = await admin.postMultipart(
+    '/library',
+    { department_id: String(departmentId('Audio')), description: 'Sunday setup' },
+    [
+      { field: 'files', name: 'Stage Plot.docx', type: 'application/octet-stream', data: docx },
+      { field: 'files', name: 'Input List.xlsx', type: '', data: buildXlsx() },
+      { field: 'files', name: 'Manual.pdf', type: 'application/pdf', data: Buffer.from('%PDF-1.4\n%%EOF\n') }
+    ],
+    '/library'
+  );
+  assert.equal(response.status, 302);
+
+  const rows = libraryRows();
+  assert.deepEqual(rows.map((row) => row.title), ['Stage Plot', 'Input List', 'Manual']);
+  assert.equal(rows[0].original_filename, 'Stage Plot.docx');
+  assert.equal(rows[0].department_id, departmentId('Audio'));
+  [libraryIds.docx, libraryIds.xlsx, libraryIds.pdf] = rows.map((row) => row.id);
+
+  const list = await admin.page('/library');
+  assert.match(list.text, /Stage Plot/);
+  assert.match(list.text, /Sunday setup/);
+  const search = await admin.page('/library?q=plot');
+  assert.match(search.text, /Stage Plot/);
+  assert.doesNotMatch(search.text, /Input List/);
+
+  const word = await admin.page(`/library/${libraryIds.docx}`);
+  assert.match(word.text, /class="doc-page"/);
+  assert.match(word.text, /Downstage center/);
+  assert.match(word.text, /<td>.*Pulpit.*<\/td>/s);
+
+  const sheet = await admin.page(`/library/${libraryIds.xlsx}`);
+  assert.match(sheet.text, /data-sheet-tab="1">Monitors</);
+  assert.match(sheet.text, /Stage left/);
+  assert.match(sheet.text, /Kick &lt;script&gt;/);
+  assert.doesNotMatch(sheet.text, /<script>alert/);
+
+  const download = await admin.request(`/library/${libraryIds.docx}/file`);
+  assert.match(download.headers.get('content-disposition'), /^attachment; filename="Stage Plot.docx"/);
+  const pdf = await admin.request(`/library/${libraryIds.pdf}/file`);
+  assert.equal(pdf.headers.get('content-type'), 'application/pdf');
+  assert.match(pdf.headers.get('content-disposition'), /^inline/);
+  const pdfDownload = await admin.request(`/library/${libraryIds.pdf}/file?download=1`);
+  assert.match(pdfDownload.headers.get('content-disposition'), /^attachment/);
+});
+
+test('the library refuses file types it cannot safely serve', async () => {
+  const before = fs.readdirSync(path.join(dataDir, 'uploads', 'library')).length;
+  const response = await admin.postMultipart(
+    '/library',
+    {},
+    [
+      { field: 'files', name: 'notes.txt', type: 'text/plain', data: Buffer.from('fine') },
+      { field: 'files', name: 'page.html', type: 'text/plain', data: Buffer.from('<script>alert(1)</script>') }
+    ],
+    '/library'
+  );
+  assert.equal(response.status, 302);
+  const { text } = await admin.page('/library');
+  assert.match(text, /page\.html is not an allowed file type/);
+  assert.equal(libraryRows().length, 3);
+  assert.equal(fs.readdirSync(path.join(dataDir, 'uploads', 'library')).length, before);
+});
+
+test('library files can be edited, replaced, and deleted', async () => {
+  const [oldRow] = libraryRows();
+  const replacement = await buildDocx('<w:p><w:r><w:t>Version two</w:t></w:r></w:p>');
+  const response = await admin.postMultipart(
+    `/library/${libraryIds.docx}`,
+    { title: 'Stage Plot (Main Hall)', department_id: '', description: '' },
+    [{ field: 'file', name: 'stage-plot-v2.docx', type: '', data: replacement }],
+    `/library/${libraryIds.docx}/edit`
+  );
+  assert.equal(response.status, 302);
+
+  const updated = libraryRows().find((row) => row.id === libraryIds.docx);
+  assert.equal(updated.title, 'Stage Plot (Main Hall)');
+  assert.equal(updated.department_id, null);
+  assert.equal(updated.original_filename, 'stage-plot-v2.docx');
+  assert.match((await admin.page(`/library/${libraryIds.docx}`)).text, /Version two/);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(!fs.existsSync(path.join(dataDir, 'uploads', 'library', oldRow.filename)));
+
+  const pdfRow = libraryRows().find((row) => row.id === libraryIds.pdf);
+  await admin.post(`/library/${libraryIds.pdf}/delete`, {}, '/library');
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(!libraryRows().some((row) => row.id === libraryIds.pdf));
+  assert.ok(!fs.existsSync(path.join(dataDir, 'uploads', 'library', pdfRow.filename)));
+  assert.equal((await admin.request(`/library/${libraryIds.pdf}/file`)).status, 404);
+});
+
 let backupPath;
 
 test('backups leave out this server\'s session secret', async () => {
@@ -352,6 +494,9 @@ test('backups leave out this server\'s session secret', async () => {
   const snapshot = entries.get('database/simple_issue_tracker.sqlite');
   assert.ok(!snapshot.includes(Buffer.from(secret)), 'secret bytes left in the SQLite snapshot');
   assert.ok([...entries.keys()].some((name) => name.startsWith('uploads/')));
+  assert.equal([...entries.keys()].filter((name) => name.startsWith('library/')).length, 2);
+  assert.ok(![...entries.keys()].some((name) => name.startsWith('uploads/library')));
+  assert.equal(records.library_files.length, 2);
 });
 
 test('restoring a zip saves the current data first and keeps you signed in', async () => {
@@ -371,6 +516,10 @@ test('restoring a zip saves the current data first and keeps you signed in', asy
   const attachment = database.prepare('SELECT filename FROM attachments').get();
   database.close();
   assert.equal((await admin.request(`/uploads/${attachment.filename}`)).status, 200);
+
+  assert.equal(libraryRows().length, 2);
+  assert.match((await admin.page(`/library/${libraryIds.docx}`)).text, /Version two/);
+  assert.equal((await admin.request(`/library/${libraryIds.xlsx}/file`)).status, 200);
 });
 
 test('a hostile backup cannot inject scripts, HTML files, or secrets', async () => {
@@ -426,6 +575,10 @@ test('a hostile backup cannot inject scripts, HTML files, or secrets', async () 
   assert.equal(upload.headers.get('content-type'), 'application/octet-stream');
   assert.match(upload.headers.get('content-disposition'), /attachment/);
   assert.equal((await admin.request('/logo/evil.html')).status, 404);
+
+  // The backup had no library, so the restore empties it.
+  assert.equal(libraryRows().length, 0);
+  assert.deepEqual(fs.readdirSync(path.join(dataDir, 'uploads', 'library')), []);
 
   const signedOut = await bystander.request('/');
   assert.match(signedOut.headers.get('location'), /login/, 'restoring a different password should sign others out');

@@ -35,6 +35,7 @@ const MAX_PREVIEW_SIZE = 20 * 1024 * 1024;
 const MAX_TEXT_PREVIEW_SIZE = 1024 * 1024;
 const MAX_SHEET_ROWS = 500;
 const MAX_SHEETS = 25;
+const MAX_SHEET_COLUMNS = 200;
 
 function libraryExtension(filename) {
   return path.extname(filename || '').toLowerCase();
@@ -97,20 +98,158 @@ async function wordPreview(filePath) {
   return html ? { kind: 'word', html } : { kind: 'none', reason: 'This document has no text to show.' };
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Excel's default column is 64px wide; files that never set widths (CSV, generated sheets) are sized to their text.
+const DEFAULT_COLUMN_PX = 64;
+const MIN_COLUMN_PX = 28;
+const MAX_ESTIMATED_COLUMN_PX = 360;
+// The page font runs wider than Excel's Calibri, so saved widths are scaled up to fit the same text.
+const SAVED_WIDTH_SCALE = 1.2;
+
+function savedColumnWidth(column) {
+  if (!column) {
+    return 0;
+  }
+  if (column.wpx) {
+    return column.wpx;
+  }
+  if (column.wch) {
+    return Math.round(column.wch * 7 + 5);
+  }
+  return column.width ? Math.round(column.width * 7) : 0;
+}
+
+// Builds the table by hand so it keeps the sheet's own column widths, hidden rows and columns, and merged cells.
+function renderSheetTable(sheet) {
+  const range = XLSX.utils.decode_range(sheet['!ref']);
+  range.e.r = Math.min(range.e.r, range.s.r + MAX_SHEET_ROWS - 1);
+  const columns = sheet['!cols'] || [];
+  const rowInfo = sheet['!rows'] || [];
+
+  const text = (r, c) => {
+    const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+    return cell ? XLSX.utils.format_cell(cell) : '';
+  };
+
+  // Sheets often claim a larger used range than they fill, so trailing empty rows and columns are dropped.
+  // Only cells that exist are checked, since a claimed range can span thousands of empty columns.
+  let lastRow = range.s.r - 1;
+  let lastColumn = range.s.c - 1;
+  for (const address of Object.keys(sheet)) {
+    if (address[0] === '!') {
+      continue;
+    }
+    const { r, c } = XLSX.utils.decode_cell(address);
+    if (r >= range.s.r && r <= range.e.r && c >= range.s.c && c <= range.e.c && text(r, c) !== '') {
+      lastRow = Math.max(lastRow, r);
+      lastColumn = Math.max(lastColumn, c);
+    }
+  }
+  if (lastRow < range.s.r) {
+    return '';
+  }
+  lastColumn = Math.min(lastColumn, range.s.c + MAX_SHEET_COLUMNS - 1);
+
+  const spans = new Map();
+  const covered = new Set();
+  for (const merge of sheet['!merges'] || []) {
+    if (merge.s.r > lastRow || merge.s.c > lastColumn) {
+      continue;
+    }
+    const mergeLastRow = Math.min(merge.e.r, lastRow);
+    const mergeLastColumn = Math.min(merge.e.c, lastColumn);
+    spans.set(`${merge.s.r}:${merge.s.c}`, {
+      rowspan: mergeLastRow - merge.s.r + 1,
+      colspan: mergeLastColumn - merge.s.c + 1
+    });
+    for (let r = merge.s.r; r <= mergeLastRow; r += 1) {
+      for (let c = merge.s.c; c <= mergeLastColumn; c += 1) {
+        if (r !== merge.s.r || c !== merge.s.c) {
+          covered.add(`${r}:${c}`);
+        }
+      }
+    }
+  }
+
+  const rows = [];
+  for (let r = range.s.r; r <= lastRow; r += 1) {
+    if (!(rowInfo[r] && rowInfo[r].hidden)) {
+      rows.push(r);
+    }
+  }
+  const visibleColumns = [];
+  for (let c = range.s.c; c <= lastColumn; c += 1) {
+    if (!(columns[c] && columns[c].hidden)) {
+      visibleColumns.push(c);
+    }
+  }
+
+  const hasSavedWidths = columns.some((column) => savedColumnWidth(column) > 0);
+  const widths = visibleColumns.map((c) => {
+    if (hasSavedWidths) {
+      return Math.max(MIN_COLUMN_PX, (savedColumnWidth(columns[c]) || DEFAULT_COLUMN_PX) * SAVED_WIDTH_SCALE);
+    }
+    const longest = rows.slice(0, 200).reduce((length, r) => {
+      const lines = text(r, c).split('\n');
+      return Math.max(length, ...lines.map((line) => line.length));
+    }, 0);
+    return Math.min(MAX_ESTIMATED_COLUMN_PX, Math.max(DEFAULT_COLUMN_PX, longest * 7.5 + 20));
+  });
+
+  const colgroup = ['<col data-width="46">']
+    .concat(widths.map((width) => `<col data-width="${Math.round(width)}">`))
+    .join('');
+  const head = '<th class="sheet-corner"></th>'
+    + visibleColumns.map((c) => `<th scope="col">${XLSX.utils.encode_col(c)}</th>`).join('');
+  const body = rows.map((r) => {
+    const cells = visibleColumns.map((c) => {
+      const key = `${r}:${c}`;
+      if (covered.has(key)) {
+        return '';
+      }
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      const span = spans.get(key);
+      const attributes = [
+        span && span.colspan > 1 ? ` colspan="${span.colspan}"` : '',
+        span && span.rowspan > 1 ? ` rowspan="${span.rowspan}"` : '',
+        cell && cell.t === 'n' ? ' class="sheet-number"' : ''
+      ].join('');
+      const value = text(r, c);
+      // The full text on hover, for words clipped by a narrow column.
+      const title = value.length > 12 ? ` title="${escapeHtml(value)}"` : '';
+      return `<td${attributes}${title}>${escapeHtml(value)}</td>`;
+    }).join('');
+    return `<tr><th scope="row">${r + 1}</th>${cells}</tr>`;
+  }).join('');
+
+  return `<table class="sheet-table"><colgroup>${colgroup}</colgroup><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
 function sheetPreview(filePath) {
-  const workbook = XLSX.readFile(filePath, { sheetRows: MAX_SHEET_ROWS + 1, cellFormula: false, cellHTML: false });
-  const sheets = workbook.SheetNames.slice(0, MAX_SHEETS).map((name) => {
+  // cellStyles is what makes SheetJS read column widths and hidden rows and columns.
+  const workbook = XLSX.readFile(filePath, {
+    sheetRows: MAX_SHEET_ROWS + 1,
+    cellFormula: false,
+    cellHTML: false,
+    cellStyles: true
+  });
+  const sheetInfo = (workbook.Workbook && workbook.Workbook.Sheets) || [];
+  const visibleNames = workbook.SheetNames.filter((_name, index) => !(sheetInfo[index] && sheetInfo[index].Hidden));
+  const sheets = visibleNames.slice(0, MAX_SHEETS).map((name) => {
     const sheet = workbook.Sheets[name];
     const fullRange = sheet['!fullref'] || sheet['!ref'];
     const totalRows = fullRange ? XLSX.utils.decode_range(fullRange).e.r + 1 : 0;
-    if (sheet['!ref']) {
-      const range = XLSX.utils.decode_range(sheet['!ref']);
-      range.e.r = Math.min(range.e.r, range.s.r + MAX_SHEET_ROWS - 1);
-      sheet['!ref'] = XLSX.utils.encode_range(range);
-    }
     return {
       name,
-      html: sheet['!ref'] ? sanitizeDocumentHtml(XLSX.utils.sheet_to_html(sheet, { header: '', footer: '' })) : '',
+      html: sheet['!ref'] ? renderSheetTable(sheet) : '',
       truncated: totalRows > MAX_SHEET_ROWS
     };
   });
@@ -118,7 +257,7 @@ function sheetPreview(filePath) {
     kind: 'sheets',
     sheets,
     maxRows: MAX_SHEET_ROWS,
-    hiddenSheetCount: Math.max(0, workbook.SheetNames.length - sheets.length)
+    hiddenSheetCount: Math.max(0, visibleNames.length - sheets.length)
   };
 }
 

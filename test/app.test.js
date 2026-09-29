@@ -180,7 +180,10 @@ function buildDocx(bodyXml) {
 
 function buildXlsx() {
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Channel', 'Source'], [1, 'Kick <script>alert(1)</script>']]), 'Inputs');
+  const inputs = XLSX.utils.aoa_to_sheet([['Channel', 'Source', 'Secret'], [1, 'Kick <script>alert(1)</script>', 'hidden value'], ['Drums', '']]);
+  inputs['!cols'] = [{ wpx: 70 }, { wpx: 300 }, { hidden: true }];
+  inputs['!merges'] = [{ s: { r: 2, c: 0 }, e: { r: 2, c: 1 } }];
+  XLSX.utils.book_append_sheet(workbook, inputs, 'Inputs');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Mix', 'Wedge'], ['Monitor 1', 'Stage left']]), 'Monitors');
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 }
@@ -422,6 +425,9 @@ test('library files upload and open in the browser', async () => {
   assert.match(sheet.text, /Stage left/);
   assert.match(sheet.text, /Kick &lt;script&gt;/);
   assert.doesNotMatch(sheet.text, /<script>alert/);
+  assert.match(sheet.text, /<col data-width="84"><col data-width="360"><\/colgroup>/);
+  assert.doesNotMatch(sheet.text, /hidden value/);
+  assert.match(sheet.text, /<td colspan="2">Drums<\/td>/);
 
   const download = await admin.request(`/library/${libraryIds.docx}/file`);
   assert.match(download.headers.get('content-disposition'), /^attachment; filename="Stage Plot.docx"/);

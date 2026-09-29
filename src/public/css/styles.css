@@ -1462,26 +1462,61 @@ select:focus,
   background: var(--surface);
 }
 
-.sheet-scroll table {
-  border-collapse: collapse;
-  font-size: 0.9rem;
+/* Spreadsheet preview styled like a grid, with column letters and row numbers. */
+.sheet-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.86rem;
 }
 
-.sheet-scroll td,
-.sheet-scroll th {
-  min-width: 60px;
-  max-width: 420px;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  white-space: pre-wrap;
+.sheet-table-sized {
+  table-layout: fixed;
+}
+
+.sheet-table td,
+.sheet-table th {
+  padding: 3px 5px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   vertical-align: top;
+  white-space: pre-wrap;
 }
 
-.sheet-scroll tr:first-child td {
+/* Like Excel: wrap at spaces, and clip a word that is wider than its column instead of splitting it. */
+.sheet-table-sized td {
+  overflow: hidden;
+}
+
+.sheet-table td.sheet-number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.sheet-table thead th {
   position: sticky;
   top: 0;
+  z-index: 2;
+  color: var(--muted);
   background: var(--surface-strong);
+  font-size: 0.76rem;
   font-weight: 700;
+  text-align: center;
+}
+
+.sheet-table tbody th {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  color: var(--muted);
+  background: var(--surface-strong);
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.sheet-table thead th.sheet-corner {
+  left: 0;
+  z-index: 3;
 }
 
 .doc-text {

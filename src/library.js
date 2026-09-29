@@ -62,10 +62,24 @@ function cleanDisplayFilename(filename) {
   return name || 'file';
 }
 
+const TITLE_SMALL_WORDS = new Set(['a', 'an', 'and', 'as', 'at', 'by', 'for', 'in', 'of', 'on', 'or', 'the', 'to', 'vs']);
+
+// Turns "new-hope-network-team-reference.xlsx" into "New Hope Network Team Reference", so nobody has to
+// rename files before uploading. Names that already have capitals keep them.
+// Keep in step with titleFromFilename in public/js/app.js, which pre-fills the upload form.
 function titleFromFilename(filename) {
   const name = cleanDisplayFilename(filename);
   const extension = path.extname(name);
-  return (extension ? name.slice(0, -extension.length) : name).trim().slice(0, 160) || name;
+  const stem = (extension ? name.slice(0, -extension.length) : name).replace(/[_.\s-]+/g, ' ').trim();
+  if (!stem) {
+    return name.slice(0, 160);
+  }
+  const title = stem === stem.toLowerCase()
+    ? stem.split(' ').map((word, index) => (
+      index > 0 && TITLE_SMALL_WORDS.has(word) ? word : word.charAt(0).toUpperCase() + word.slice(1)
+    )).join(' ')
+    : stem;
+  return title.slice(0, 160);
 }
 
 function sanitizeDocumentHtml(html) {

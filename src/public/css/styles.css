@@ -1560,3 +1560,32 @@ select:focus,
 .page-heading > .primary-button {
   white-space: nowrap;
 }
+
+.library-titles {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-soft);
+}
+
+.library-titles[hidden] {
+  display: none;
+}
+
+.library-titles legend {
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.library-titles .field-hint {
+  margin: 0;
+}
+
+.library-titles label {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}

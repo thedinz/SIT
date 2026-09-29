@@ -438,6 +438,26 @@ test('library files upload and open in the browser', async () => {
   assert.match(pdfDownload.headers.get('content-disposition'), /^attachment/);
 });
 
+test('library uploads take a title per file and tidy file names otherwise', async () => {
+  const response = await admin.postMultipart(
+    '/library',
+    { titles: ['UniFi Network Map', ''] },
+    [
+      { field: 'files', name: 'new-hope-network-team-reference.txt', type: 'text/plain', data: Buffer.from('map') },
+      { field: 'files', name: 'guide_to_the_booth.txt', type: 'text/plain', data: Buffer.from('booth') }
+    ],
+    '/library'
+  );
+  assert.equal(response.status, 302);
+
+  const added = libraryRows().slice(-2);
+  assert.deepEqual(added.map((row) => row.title), ['UniFi Network Map', 'Guide to the Booth']);
+  assert.equal(added[0].original_filename, 'new-hope-network-team-reference.txt');
+  for (const row of added) {
+    await admin.post(`/library/${row.id}/delete`, {}, '/library');
+  }
+});
+
 test('the library refuses file types it cannot safely serve', async () => {
   const before = fs.readdirSync(path.join(dataDir, 'uploads', 'library')).length;
   const response = await admin.postMultipart(

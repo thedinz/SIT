@@ -325,6 +325,18 @@
     });
   });
 
+  // Applies the spreadsheet's own column widths; the page's security policy blocks inline style attributes.
+  document.querySelectorAll('.sheet-table').forEach(function (table) {
+    let total = 0;
+    table.querySelectorAll('col[data-width]').forEach(function (col) {
+      const width = Number(col.getAttribute('data-width')) || 64;
+      col.style.width = width + 'px';
+      total += width;
+    });
+    table.style.width = total + 'px';
+    table.classList.add('sheet-table-sized');
+  });
+
   document.querySelectorAll('[data-sheet-viewer]').forEach(function (viewer) {
     const tabs = viewer.querySelectorAll('[data-sheet-tab]');
     const panels = viewer.querySelectorAll('[data-sheet-panel]');

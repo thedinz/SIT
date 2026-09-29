@@ -9,13 +9,15 @@ const ROOT_DIR = path.join(__dirname, '..');
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT_DIR, 'data');
 const DB_DIR = path.join(DATA_DIR, 'db');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
+// Inside uploads so existing Docker volumes keep library files without a compose change.
+const LIBRARY_DIR = path.join(UPLOAD_DIR, 'library');
 const LOGO_DIR = path.join(DATA_DIR, 'logo');
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const TMP_DIR = path.join(DATA_DIR, 'tmp');
 const DB_PATH = process.env.DB_PATH || path.join(DB_DIR, 'simple_issue_tracker.sqlite');
 const DEFAULT_PASSWORD = 'admin';
 
-for (const dir of [DB_DIR, UPLOAD_DIR, LOGO_DIR, BACKUP_DIR, TMP_DIR]) {
+for (const dir of [DB_DIR, UPLOAD_DIR, LIBRARY_DIR, LOGO_DIR, BACKUP_DIR, TMP_DIR]) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
@@ -149,6 +151,7 @@ module.exports = {
   DATA_DIR,
   DB_DIR,
   UPLOAD_DIR,
+  LIBRARY_DIR,
   LOGO_DIR,
   BACKUP_DIR,
   TMP_DIR,

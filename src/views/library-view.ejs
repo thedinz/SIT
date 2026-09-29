@@ -1,0 +1,71 @@
+<%- include('partials/top', { title: file.title }) %>
+
+<% const fileUrl = urlFor(`/library/${file.id}/file/${encodeURIComponent(file.original_filename)}`); %>
+<section class="page-heading">
+  <div>
+    <p class="eyebrow"><%= file.department_name || 'General' %> &middot; <%= file.typeLabel %></p>
+    <h1 class="library-title"><%= file.title %></h1>
+    <p class="meta-line"><%= file.original_filename %> &middot; <%= formatBytes(file.size) %> &middot; Updated <%- localTime(file.updated_at) %></p>
+    <% if (file.description) { %>
+      <p class="library-description"><%= file.description %></p>
+    <% } %>
+  </div>
+  <div class="backup-row-actions">
+    <a class="primary-button compact" href="<%= urlFor(`/library/${file.id}/file?download=1`) %>">Download</a>
+    <% if (preview.kind === 'pdf' || preview.kind === 'image' || preview.kind === 'text') { %>
+      <a class="secondary-button compact" href="<%= fileUrl %>" target="_blank" rel="noopener">Open in New Tab</a>
+    <% } %>
+    <a class="secondary-button compact" href="<%= urlFor(`/library/${file.id}/edit`) %>">Edit</a>
+    <a class="ghost-button compact" href="<%= urlFor('/library') %>">Back</a>
+  </div>
+</section>
+
+<% if (preview.kind === 'pdf') { %>
+  <iframe class="doc-frame" src="<%= fileUrl %>" title="<%= file.title %>"></iframe>
+<% } else if (preview.kind === 'image') { %>
+  <div class="doc-image-wrap">
+    <img class="doc-image" src="<%= fileUrl %>" alt="<%= file.title %>">
+  </div>
+<% } else if (preview.kind === 'word') { %>
+  <p class="field-hint doc-note">Preview of the text, tables, and pictures. Download to open it in Word with its exact layout.</p>
+  <article class="doc-page"><%- preview.html %></article>
+<% } else if (preview.kind === 'sheets') { %>
+  <p class="field-hint doc-note">Preview of the values in each sheet<%= preview.sheets.some((sheet) => sheet.truncated) ? `, showing the first ${preview.maxRows} rows` : '' %>. Download to open it in Excel with formulas and formatting.</p>
+  <div class="sheet-viewer" data-sheet-viewer>
+    <% if (preview.sheets.length > 1) { %>
+      <div class="sheet-tabs" role="tablist" aria-label="Sheets">
+        <% preview.sheets.forEach((sheet, index) => { %>
+          <button type="button" role="tab" id="sheet-tab-<%= index %>" aria-controls="sheet-panel-<%= index %>" aria-selected="<%= index === 0 %>" data-sheet-tab="<%= index %>"><%= sheet.name %></button>
+        <% }) %>
+      </div>
+    <% } %>
+    <% preview.sheets.forEach((sheet, index) => { %>
+      <div class="sheet-panel" id="sheet-panel-<%= index %>" <% if (preview.sheets.length > 1) { %>role="tabpanel" aria-labelledby="sheet-tab-<%= index %>"<% } %> data-sheet-panel="<%= index %>" <%= index === 0 ? '' : 'hidden' %>>
+        <% if (sheet.html) { %>
+          <div class="sheet-scroll"><%- sheet.html %></div>
+          <% if (sheet.truncated) { %>
+            <p class="field-hint">Only the first <%= preview.maxRows %> rows are shown. Download the file to see the rest.</p>
+          <% } %>
+        <% } else { %>
+          <p class="muted">This sheet is empty.</p>
+        <% } %>
+      </div>
+    <% }) %>
+    <% if (preview.hiddenSheetCount > 0) { %>
+      <p class="field-hint"><%= preview.hiddenSheetCount %> more <%= preview.hiddenSheetCount === 1 ? 'sheet is' : 'sheets are' %> not shown. Download the file to see them.</p>
+    <% } %>
+  </div>
+<% } else if (preview.kind === 'text') { %>
+  <pre class="doc-text"><%= preview.text %></pre>
+  <% if (preview.truncated) { %>
+    <p class="field-hint">Only the first 1 MB is shown. Download the file to see the rest.</p>
+  <% } %>
+<% } else { %>
+  <section class="empty-state">
+    <h2>No preview available</h2>
+    <p><%= preview.reason %> Download it to open it in <%= file.typeLabel === 'PowerPoint' ? 'PowerPoint' : 'the app it belongs to' %>.</p>
+    <a class="primary-button compact" href="<%= urlFor(`/library/${file.id}/file?download=1`) %>">Download <%= file.extension %></a>
+  </section>
+<% } %>
+
+<%- include('partials/bottom') %>

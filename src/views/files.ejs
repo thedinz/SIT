@@ -1,10 +1,10 @@
-<%- include('partials/top', { title: 'Files' }) %>
+<%- include('partials/top', { title: 'Issue Files' }) %>
 
 <section class="page-heading">
   <div>
     <p class="eyebrow">Issue attachments</p>
-    <h1>Files</h1>
-    <p class="meta-line"><%= fileCount %> <%= fileCount === 1 ? 'file' : 'files' %> organized by department. Files from shared issues appear in each selected department.</p>
+    <h1>Issue Files</h1>
+    <p class="meta-line"><%= fileCount %> <%= fileCount === 1 ? 'file' : 'files' %> attached to issues, organized by department. Files from shared issues appear in each selected department. Documents that are not tied to an issue belong in the <a href="<%= urlFor('/library') %>">Library</a>.</p>
   </div>
   <a class="primary-button compact" href="<%= urlFor('/issues/new') %>">Add Issue</a>
 </section>

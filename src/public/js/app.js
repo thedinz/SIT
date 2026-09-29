@@ -295,6 +295,52 @@
     });
   });
 
+  // Checks library uploads before sending, so a large upload is not wasted on a file the server would refuse.
+  document.querySelectorAll('[data-library-form]').forEach(function (form) {
+    form.addEventListener('submit', function (event) {
+      const input = form.querySelector('input[type="file"]');
+      if (!input) return;
+      const files = Array.from(input.files);
+      const maxFiles = Number(form.getAttribute('data-max-files') || 0);
+      const maxSize = Number(form.getAttribute('data-max-file-size') || 0);
+      const allowed = (form.getAttribute('data-accept') || '').split(',');
+      let problem = '';
+      if (maxFiles && files.length > maxFiles) {
+        problem = 'Upload up to ' + maxFiles + ' files at a time.';
+      }
+      files.forEach(function (file) {
+        if (problem) return;
+        const dot = file.name.lastIndexOf('.');
+        const extension = dot === -1 ? '' : file.name.slice(dot).toLowerCase();
+        if (allowed.indexOf(extension) === -1) {
+          problem = file.name + ' is not a supported file type.';
+        } else if (maxSize && file.size > maxSize) {
+          problem = file.name + ' is larger than ' + formatSize(maxSize) + '.';
+        }
+      });
+      if (problem) {
+        event.preventDefault();
+        showFormMessage(form, problem);
+      }
+    });
+  });
+
+  document.querySelectorAll('[data-sheet-viewer]').forEach(function (viewer) {
+    const tabs = viewer.querySelectorAll('[data-sheet-tab]');
+    const panels = viewer.querySelectorAll('[data-sheet-panel]');
+    tabs.forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        const index = tab.getAttribute('data-sheet-tab');
+        tabs.forEach(function (other) {
+          other.setAttribute('aria-selected', String(other === tab));
+        });
+        panels.forEach(function (panel) {
+          panel.hidden = panel.getAttribute('data-sheet-panel') !== index;
+        });
+      });
+    });
+  });
+
   document.querySelectorAll('[data-confirm]').forEach(function (form) {
     form.addEventListener('submit', function (event) {
       const message = form.getAttribute('data-confirm') || 'Are you sure?';

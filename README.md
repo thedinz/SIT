@@ -11,7 +11,8 @@ A simple self-hosted issue-and-resolution log for church production teams. It is
 - WYSIWYG issue and resolution editors with bold, italic, lists, and links
 - Screenshot/file attachments for images and PDFs; paste a screenshot straight into the editor to attach it
 - Edit conflict detection, and issues can be deleted from the edit page
-- Files page with issue attachments grouped by department
+- Issue Files page with issue attachments grouped by department
+- Library for standing team documents (stage plots, input lists, manuals) that are not tied to an issue, with in-browser viewing of Word, Excel, PDF, image, and text files
 - Settings for title, logo, departments, theme, and shared password
 - Full zip backup export/import from Settings
 - Automatic daily, weekly, or monthly server backups
@@ -75,14 +76,14 @@ Docker Compose stores app data in local folders:
 
 ```text
 ./storage/db       SQLite database
-./storage/uploads  Uploaded screenshots/files
+./storage/uploads  Uploaded screenshots/files, plus Library files in uploads/library
 ./storage/logo     Uploaded app logo
 ./storage/backups  Scheduled full zip backups
 ```
 
 The app container uses `/data/db`, `/data/uploads`, `/data/logo`, and `/data/backups` internally.
 
-Settings includes a full zip backup tool. The backup contains a SQLite snapshot, app settings, departments, issues, uploaded attachments, and logo files. Keep backup files private because they include the stored shared-password hash. Backups never include this server's session secret, so a leaked backup cannot be used to forge a login.
+Settings includes a full zip backup tool. The backup contains a SQLite snapshot, app settings, departments, issues, uploaded attachments, Library files, and logo files. Keep backup files private because they include the stored shared-password hash. Backups never include this server's session secret, so a leaked backup cannot be used to forge a login.
 
 ## Docker Compose Example
 
@@ -131,6 +132,7 @@ The backup zip includes:
 ```text
 database/simple_issue_tracker.sqlite
 uploads/
+library/
 logo/
 manifest.json
 metadata/records.json
@@ -183,6 +185,28 @@ RUN_AS_ROOT=false
 - The container now runs the app as the `node` user. On first start it changes ownership of the existing `storage` folders to that user automatically.
 - Logout and "Download Fresh Zip" are now buttons that submit a form, so old bookmarks to `/logout` no longer work.
 
+## Library
+
+The **Library** page holds files your teams always need, such as stage plots, input lists, checklists, and manuals. Unlike Issue Files, they are not attached to an issue and stay until someone removes them.
+
+- Upload several files at once and file them under a department, or under General for everyone
+- Search by name or description and filter by department
+- Click a file to open it in the browser:
+  - PDF and images open in the built-in viewer
+  - Word (.docx) shows the text, tables, and pictures as a page
+  - Excel (.xlsx, .xlsm, .xls), OpenDocument spreadsheets, and CSV show each sheet as a table (first 500 rows per sheet)
+  - Text files show as plain text
+  - PowerPoint, older .doc files, and other documents are offered as a download
+- Every file has a Download button that opens it in Word, Excel, or PowerPoint with its exact formatting
+- Edit a file's name, department, or description, or replace it with a new version while keeping the same link
+
+Library files are stored in `storage/uploads/library`, so existing Docker Compose setups keep them without any changes, and they are included in full backups.
+
+## Upgrading to 1.5
+
+- The Files page is now called **Issue Files**, and the new **Library** page sits next to it.
+- No Docker Compose changes are needed.
+
 ## Default Departments
 
 Seeded on first run:
@@ -194,17 +218,25 @@ Seeded on first run:
 - Stage
 - Other
 
-Departments can be added, renamed, and deleted from Settings. A department cannot be deleted while existing issues use it.
+Departments can be added, renamed, and deleted from Settings. A department cannot be deleted while existing issues use it. Library files in a deleted department move to General.
 
 ## Upload Rules
 
-Allowed attachment types:
+Allowed issue attachment types:
 
 - jpg/jpeg
 - png
 - gif
 - webp
 - pdf
+
+Library uploads allow up to 20 files of 50 MB each:
+
+- Word: doc, docx, odt, rtf
+- Excel: xls, xlsx, xlsm, ods, csv
+- PowerPoint: ppt, pptx, odp
+- pdf, txt, md
+- jpg/jpeg, png, gif, webp
 
 Logo uploads allow common image formats only.
 

@@ -68,7 +68,7 @@ const BACKUP_FILENAME_PREFIX = 'simple-issue-tracker-backup-';
 const SCHEDULED_BACKUP_CHECK_MS = 60 * 60 * 1000;
 const SCHEDULED_BACKUP_RETENTION = 30;
 const PRE_RESTORE_BACKUP_RETENTION = 5;
-const ASSET_VERSION = '20260929-5';
+const ASSET_VERSION = '20260929-6';
 const THEME_COOKIE = 'sit_theme';
 const DEPARTMENT_SEPARATOR = '\u001f';
 // Settings that belong to this server rather than to the data, so they are never exported or restored.
@@ -1919,17 +1919,19 @@ app.post(
 
     const departmentId = libraryDepartmentId(req.body.department_id);
     const description = String(req.body.description || '').trim().slice(0, 500);
+    // One title per file, in the order the files were chosen; a blank title falls back to a tidied file name.
+    const titles = [].concat(req.body.titles || []).map((title) => String(title).trim().slice(0, 160));
     const insert = db.prepare(`
       INSERT INTO library_files (department_id, title, description, filename, original_filename, mime_type, size, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const timestamp = nowIso();
     db.transaction(() => {
-      for (const file of files) {
+      files.forEach((file, index) => {
         const originalFilename = cleanDisplayFilename(file.originalname);
         insert.run(
           departmentId,
-          titleFromFilename(originalFilename),
+          titles[index] || titleFromFilename(originalFilename),
           description,
           normalizeFilename(file.filename),
           originalFilename,
@@ -1938,7 +1940,7 @@ app.post(
           timestamp,
           timestamp
         );
-      }
+      });
     })();
 
     setFlash(req, 'success', files.length === 1 ? 'File added to the Library.' : `${files.length} files added to the Library.`);

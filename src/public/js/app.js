@@ -295,6 +295,52 @@
     });
   });
 
+  const TITLE_SMALL_WORDS = ['a', 'an', 'and', 'as', 'at', 'by', 'for', 'in', 'of', 'on', 'or', 'the', 'to', 'vs'];
+
+  // Same rules as titleFromFilename in src/library.js: "new-hope-network.xlsx" becomes "New Hope Network".
+  function titleFromFilename(filename) {
+    const dot = filename.lastIndexOf('.');
+    const stem = (dot > 0 ? filename.slice(0, dot) : filename).replace(/[_.\s-]+/g, ' ').trim();
+    if (!stem || stem !== stem.toLowerCase()) return stem.slice(0, 160);
+    return stem.split(' ').map(function (word, index) {
+      return index > 0 && TITLE_SMALL_WORDS.indexOf(word) !== -1 ? word : word.charAt(0).toUpperCase() + word.slice(1);
+    }).join(' ').slice(0, 160);
+  }
+
+  // One editable title per chosen file, sent in the same order as the files.
+  document.querySelectorAll('[data-library-files]').forEach(function (input) {
+    const form = input.form;
+    const panel = form.querySelector('[data-library-titles]');
+    const list = form.querySelector('[data-library-title-list]');
+    if (!panel || !list) return;
+
+    input.addEventListener('change', function () {
+      const previous = {};
+      list.querySelectorAll('[data-file-name]').forEach(function (field) {
+        previous[field.getAttribute('data-file-name')] = field.value;
+      });
+      list.innerHTML = '';
+      Array.from(input.files).forEach(function (file, index) {
+        const row = document.createElement('div');
+        row.className = 'field';
+        const label = document.createElement('label');
+        label.setAttribute('for', 'library-title-' + index);
+        label.textContent = file.name + ' (' + formatSize(file.size) + ')';
+        const field = document.createElement('input');
+        field.type = 'text';
+        field.id = 'library-title-' + index;
+        field.name = 'titles';
+        field.maxLength = 160;
+        field.setAttribute('data-file-name', file.name);
+        field.value = Object.prototype.hasOwnProperty.call(previous, file.name) ? previous[file.name] : titleFromFilename(file.name);
+        row.appendChild(label);
+        row.appendChild(field);
+        list.appendChild(row);
+      });
+      panel.hidden = input.files.length === 0;
+    });
+  });
+
   // Checks library uploads before sending, so a large upload is not wasted on a file the server would refuse.
   document.querySelectorAll('[data-library-form]').forEach(function (form) {
     form.addEventListener('submit', function (event) {

@@ -16,10 +16,14 @@
     <div class="form-error" role="alert" data-form-error hidden></div>
     <div class="field">
       <label for="library-files">Files</label>
-      <input id="library-files" name="files" type="file" multiple required accept="<%= acceptList %>" data-attachment-input>
+      <input id="library-files" name="files" type="file" multiple required accept="<%= acceptList %>" data-library-files>
       <p class="field-hint">Word, Excel, PowerPoint, PDF, images, or text files. Up to <%= maxFiles %> files of <%= formatBytes(maxFileSize) %> each.</p>
-      <ul class="selected-files" data-attachment-list hidden></ul>
     </div>
+    <fieldset class="library-titles" data-library-titles hidden>
+      <legend>Titles</legend>
+      <p class="field-hint">This is the name people see in the Library. It starts from the file name; change it to anything you like.</p>
+      <div class="stack" data-library-title-list></div>
+    </fieldset>
     <div class="upload-grid">
       <div class="field">
         <label for="library-department">Department</label>

@@ -14,10 +14,12 @@ const bcrypt = require('bcryptjs');
 const Database = require('better-sqlite3');
 const yazl = require('yazl');
 const yauzl = require('yauzl');
+const contentDisposition = require('content-disposition');
 
 const {
   db,
   UPLOAD_DIR,
+  LIBRARY_DIR,
   LOGO_DIR,
   BACKUP_DIR,
   TMP_DIR,
@@ -29,6 +31,15 @@ const {
   refreshDefaultPasswordFlag
 } = require('./db');
 const { sanitizeEditorHtml, textFromHtml } = require('./sanitize');
+const {
+  INLINE_VIEWERS,
+  libraryTypeFor,
+  libraryAcceptList,
+  libraryExtensionsLabel,
+  cleanDisplayFilename,
+  titleFromFilename,
+  buildPreview
+} = require('./library');
 const packageInfo = require('../package.json');
 
 const app = express();
@@ -40,6 +51,9 @@ const APP_COMMIT = process.env.APP_COMMIT || process.env.SIT_COMMIT || '';
 const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 const MAX_ATTACHMENT_FILES = 12;
 const MAX_FIELD_SIZE = 2 * 1024 * 1024;
+const MAX_LIBRARY_FILE_SIZE = 50 * 1024 * 1024;
+const MAX_LIBRARY_FILES = 20;
+const LIBRARY_DIRNAME = path.basename(LIBRARY_DIR);
 const MAX_LOGO_SIZE = 3 * 1024 * 1024;
 const MAX_BACKUP_SIZE = 5 * 1024 * 1024 * 1024;
 const MAX_RESTORE_UNCOMPRESSED_SIZE = 20 * 1024 * 1024 * 1024;
@@ -60,7 +74,14 @@ const DEPARTMENT_SEPARATOR = '\u001f';
 // Settings that belong to this server rather than to the data, so they are never exported or restored.
 const INSTANCE_SETTING_KEYS = new Set(['session_secret', 'session_version']);
 // Multipart routes verify the CSRF token themselves once multer has parsed the body.
-const MULTIPART_ROUTES = [/^\/issues$/, /^\/issues\/\d+$/, /^\/settings\/logo$/, /^\/settings\/import$/];
+const MULTIPART_ROUTES = [
+  /^\/issues$/,
+  /^\/issues\/\d+$/,
+  /^\/library$/,
+  /^\/library\/\d+$/,
+  /^\/settings\/logo$/,
+  /^\/settings\/import$/
+];
 // While the default password is in use, only these routes are reachable.
 const DEFAULT_PASSWORD_ALLOWED_PATHS = new Set(['/settings', '/settings/password', '/settings/import', '/logout']);
 const allowedAttachmentTypes = new Map([
@@ -245,6 +266,25 @@ const logoUpload = multer({
   storage: createStorage(LOGO_DIR, allowedLogoTypes),
   fileFilter: fileFilterFor(allowedLogoTypes),
   limits: { fileSize: MAX_LOGO_SIZE, files: 1 }
+});
+
+const libraryUpload = multer({
+  storage: multer.diskStorage({
+    destination: LIBRARY_DIR,
+    filename(_req, file, cb) {
+      cb(null, `${Date.now()}-${crypto.randomUUID()}${path.extname(file.originalname).toLowerCase()}`);
+    }
+  }),
+  fileFilter: (_req, file, cb) => {
+    if (!libraryTypeFor(file.originalname)) {
+      cb(new Error(`${cleanDisplayFilename(file.originalname)} is not an allowed file type. Allowed: ${libraryExtensionsLabel()}.`));
+      return;
+    }
+    cb(null, true);
+  },
+  // Browsers send file names as UTF-8, so names with accents stay readable.
+  defParamCharset: 'utf8',
+  limits: { fileSize: MAX_LIBRARY_FILE_SIZE, files: MAX_LIBRARY_FILES, fieldSize: MAX_FIELD_SIZE }
 });
 
 const backupUpload = multer({
@@ -680,6 +720,12 @@ function createBackupData(options = {}) {
       : { ...attachment }
   ));
 
+  const libraryFiles = db.prepare('SELECT * FROM library_files ORDER BY id').all().map((file) => (
+    includeFileData
+      ? { ...file, data_base64: readFileBase64IfExists(LIBRARY_DIR, file.filename) }
+      : { ...file }
+  ));
+
   const logoFilename = getSetting('logo_filename');
   const logos = logoFilename
     ? [{
@@ -708,6 +754,7 @@ function createBackupData(options = {}) {
       ORDER BY issue_id, department_id
     `).all(),
     attachments,
+    library_files: libraryFiles,
     logos
   };
 }
@@ -724,10 +771,10 @@ function writeBackupFilesTo(directory, files) {
 }
 
 // Copies the source entries over the destination and returns the names the destination should keep.
-function stageDirectoryContents(sourceDirectory, destinationDirectory) {
+function stageDirectoryContents(sourceDirectory, destinationDirectory, skipEntries = new Set()) {
   fs.mkdirSync(sourceDirectory, { recursive: true });
   fs.mkdirSync(destinationDirectory, { recursive: true });
-  const entries = fs.readdirSync(sourceDirectory);
+  const entries = fs.readdirSync(sourceDirectory).filter((entry) => !skipEntries.has(entry));
   for (const entry of entries) {
     fs.cpSync(path.join(sourceDirectory, entry), path.join(destinationDirectory, entry), { recursive: true, force: true });
   }
@@ -785,15 +832,18 @@ function backupKind(filename) {
   return 'Manual';
 }
 
-function addDirectoryToZip(zip, sourceDirectory, archiveDirectory) {
+function addDirectoryToZip(zip, sourceDirectory, archiveDirectory, skipEntries = new Set()) {
   fs.mkdirSync(sourceDirectory, { recursive: true });
   for (const entry of fs.readdirSync(sourceDirectory, { withFileTypes: true })) {
+    if (skipEntries.has(entry.name)) {
+      continue;
+    }
     const sourcePath = path.join(sourceDirectory, entry.name);
     const archivePath = `${archiveDirectory}/${entry.name}`;
     if (entry.isDirectory()) {
       addDirectoryToZip(zip, sourcePath, archivePath);
     } else if (entry.isFile()) {
-      // Images and PDFs are already compressed, so store them as-is.
+      // Images, PDFs, and Office files are already compressed, so store them as-is.
       zip.addFile(sourcePath, archivePath, { compress: false });
     }
   }
@@ -832,7 +882,7 @@ async function createFullBackupArchive(destinationPath) {
         branch: APP_BRANCH,
         commit: APP_COMMIT
       },
-      includes: ['database', 'settings', 'departments', 'issues', 'attachments', 'uploads', 'logo']
+      includes: ['database', 'settings', 'departments', 'issues', 'attachments', 'uploads', 'library', 'logo']
     };
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
     fs.writeFileSync(recordsPath, JSON.stringify(createBackupData({ includeFileData: false }), null, 2));
@@ -841,7 +891,8 @@ async function createFullBackupArchive(destinationPath) {
     zip.addFile(manifestPath, 'manifest.json');
     zip.addFile(recordsPath, 'metadata/records.json');
     zip.addFile(dbSnapshotPath, 'database/simple_issue_tracker.sqlite');
-    addDirectoryToZip(zip, UPLOAD_DIR, 'uploads');
+    addDirectoryToZip(zip, UPLOAD_DIR, 'uploads', new Set([LIBRARY_DIRNAME]));
+    addDirectoryToZip(zip, LIBRARY_DIR, 'library');
     addDirectoryToZip(zip, LOGO_DIR, 'logo');
     zip.end();
 
@@ -955,6 +1006,13 @@ function readBackupDatabaseData(databasePath) {
     const issueDepartments = tableExists(backupDb, 'issue_departments')
       ? backupDb.prepare('SELECT issue_id, department_id FROM issue_departments ORDER BY issue_id, department_id').all()
       : [];
+    const libraryFiles = tableExists(backupDb, 'library_files')
+      ? backupDb.prepare(`
+          SELECT id, department_id, title, description, filename, original_filename, mime_type, size, created_at, updated_at
+          FROM library_files
+          ORDER BY id
+        `).all()
+      : [];
 
     return {
       backup_version: 3,
@@ -970,6 +1028,7 @@ function readBackupDatabaseData(databasePath) {
       `).all(),
       issue_departments: issueDepartments,
       attachments,
+      library_files: libraryFiles,
       logos: []
     };
   } finally {
@@ -1009,12 +1068,14 @@ async function readZipEntryText(zipFile, entry, maxSize) {
 // Streams entries to disk one at a time so large backups never have to fit in memory.
 async function extractBackupArchive(archivePath, destinationRoot) {
   const tmpUploadDir = path.join(destinationRoot, 'uploads');
+  const tmpLibraryDir = path.join(destinationRoot, 'library');
   const tmpLogoDir = path.join(destinationRoot, 'logo');
   const tmpDatabasePath = path.join(destinationRoot, 'simple_issue_tracker.sqlite');
   let manifest = null;
   let totalSize = 0;
 
   fs.mkdirSync(tmpUploadDir, { recursive: true });
+  fs.mkdirSync(tmpLibraryDir, { recursive: true });
   fs.mkdirSync(tmpLogoDir, { recursive: true });
 
   const zipFile = await openZipFile(archivePath);
@@ -1050,8 +1111,13 @@ async function extractBackupArchive(archivePath, destinationRoot) {
       let targetPath = '';
       if (entryName === 'database/simple_issue_tracker.sqlite') {
         targetPath = tmpDatabasePath;
+      } else if (entryName.startsWith(`uploads/${LIBRARY_DIRNAME}/`)) {
+        // Library files only come from the archive's own library folder.
+        return;
       } else if (entryName.startsWith('uploads/')) {
         targetPath = safeZipTargetPath(tmpUploadDir, entryName.replace(/^uploads\//, ''));
+      } else if (entryName.startsWith('library/')) {
+        targetPath = safeZipTargetPath(tmpLibraryDir, entryName.replace(/^library\//, ''));
       } else if (entryName.startsWith('logo/')) {
         targetPath = safeZipTargetPath(tmpLogoDir, entryName.replace(/^logo\//, ''));
       }
@@ -1087,6 +1153,7 @@ async function extractBackupArchive(archivePath, destinationRoot) {
   return {
     databasePath: tmpDatabasePath,
     uploadDir: tmpUploadDir,
+    libraryDir: tmpLibraryDir,
     logoDir: tmpLogoDir,
     manifest
   };
@@ -1099,6 +1166,7 @@ async function restoreBackupArchive(archivePath) {
     const backup = readBackupDatabaseData(extracted.databasePath);
     return restoreBackupData(backup, {
       uploadDir: extracted.uploadDir,
+      libraryDir: extracted.libraryDir,
       logoDir: extracted.logoDir
     });
   } finally {
@@ -1156,23 +1224,31 @@ function restoreBackupData(backup, fileSource = {}) {
 
   const tmpRoot = fs.mkdtempSync(path.join(TMP_DIR, 'import-'));
   const tmpUploadDir = fileSource.uploadDir || path.join(tmpRoot, 'uploads');
+  const tmpLibraryDir = fileSource.libraryDir || path.join(tmpRoot, 'library');
   const tmpLogoDir = fileSource.logoDir || path.join(tmpRoot, 'logo');
   const previousUploads = new Set(fs.existsSync(UPLOAD_DIR) ? fs.readdirSync(UPLOAD_DIR) : []);
+  const previousLibrary = new Set(fs.existsSync(LIBRARY_DIR) ? fs.readdirSync(LIBRARY_DIR) : []);
   const previousLogos = new Set(fs.existsSync(LOGO_DIR) ? fs.readdirSync(LOGO_DIR) : []);
   const previousPasswordHash = getSetting('password_hash');
+  const libraryFolder = new Set([LIBRARY_DIRNAME]);
   let restoredUploads = new Set();
+  let restoredLibrary = new Set();
   let restoredLogos = new Set();
 
   try {
     if (!fileSource.uploadDir) {
       writeBackupFilesTo(tmpUploadDir, backup.attachments || []);
     }
+    if (!fileSource.libraryDir) {
+      writeBackupFilesTo(tmpLibraryDir, (backup.library_files || []).filter((file) => libraryTypeFor(file.filename)));
+    }
     if (!fileSource.logoDir) {
       writeBackupFilesTo(tmpLogoDir, backup.logos || []);
     }
 
     // Copy files in before touching the database; old files are only removed once the database commits.
-    restoredUploads = stageDirectoryContents(tmpUploadDir, UPLOAD_DIR);
+    restoredUploads = stageDirectoryContents(tmpUploadDir, UPLOAD_DIR, libraryFolder);
+    restoredLibrary = stageDirectoryContents(tmpLibraryDir, LIBRARY_DIR);
     restoredLogos = stageDirectoryContents(tmpLogoDir, LOGO_DIR);
 
     const restore = db.transaction(() => {
@@ -1182,6 +1258,7 @@ function restoreBackupData(backup, fileSource = {}) {
         .all(...instanceKeys);
 
       db.prepare('DELETE FROM attachments').run();
+      db.prepare('DELETE FROM library_files').run();
       db.prepare('DELETE FROM issue_departments').run();
       db.prepare('DELETE FROM issues').run();
       db.prepare('DELETE FROM departments').run();
@@ -1289,31 +1366,58 @@ function restoreBackupData(backup, fileSource = {}) {
           attachment.uploaded_at || nowIso()
         );
       }
+
+      const insertLibraryFile = db.prepare(`
+        INSERT INTO library_files (id, department_id, title, description, filename, original_filename, mime_type, size, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const file of backup.library_files || []) {
+        const filename = normalizeFilename(file.filename);
+        const type = libraryTypeFor(filename);
+        if (!filename || !type) {
+          continue;
+        }
+        const originalFilename = cleanDisplayFilename(file.original_filename || filename);
+        insertLibraryFile.run(
+          Number(file.id),
+          restoredDepartmentIds.includes(Number(file.department_id)) ? Number(file.department_id) : null,
+          String(file.title || titleFromFilename(originalFilename)).trim().slice(0, 160),
+          String(file.description || '').trim().slice(0, 500),
+          filename,
+          originalFilename,
+          type.mimeType,
+          Number(file.size || 0),
+          file.created_at || nowIso(),
+          file.updated_at || file.created_at || nowIso()
+        );
+      }
     });
 
     restore();
   } catch (error) {
     // Remove staged files that were not there before, so a failed restore leaves everything as it was.
     removeDirectoryEntries(UPLOAD_DIR, (entry) => restoredUploads.has(entry) && !previousUploads.has(entry));
+    removeDirectoryEntries(LIBRARY_DIR, (entry) => restoredLibrary.has(entry) && !previousLibrary.has(entry));
     removeDirectoryEntries(LOGO_DIR, (entry) => restoredLogos.has(entry) && !previousLogos.has(entry));
     throw error;
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 
-  removeDirectoryEntries(UPLOAD_DIR, (entry) => !restoredUploads.has(entry));
+  removeDirectoryEntries(UPLOAD_DIR, (entry) => entry !== LIBRARY_DIRNAME && !restoredUploads.has(entry));
+  removeDirectoryEntries(LIBRARY_DIR, (entry) => !restoredLibrary.has(entry));
   removeDirectoryEntries(LOGO_DIR, (entry) => !restoredLogos.has(entry));
   refreshDefaultPasswordFlag();
   return { passwordChanged: getSetting('password_hash') !== previousPasswordHash };
 }
 
-function uploadErrorMessage(error, maxSizeLabel) {
+function uploadErrorMessage(error, maxSizeLabel, maxFiles = MAX_ATTACHMENT_FILES) {
   if (error instanceof multer.MulterError) {
     if (error.code === 'LIMIT_FILE_SIZE') {
       return `Each file must be ${maxSizeLabel} or smaller.`;
     }
     if (error.code === 'LIMIT_FILE_COUNT' || error.code === 'LIMIT_UNEXPECTED_FILE') {
-      return `Too many files were selected. Attach up to ${MAX_ATTACHMENT_FILES} at a time.`;
+      return `Too many files were selected. Attach up to ${maxFiles} at a time.`;
     }
     if (error.code === 'LIMIT_FIELD_VALUE') {
       return 'The text is too long to save. If you pasted an image into the text, attach it as a file instead.';
@@ -1324,14 +1428,14 @@ function uploadErrorMessage(error, maxSizeLabel) {
 }
 
 // Runs a multer middleware, handing any upload error to onError instead of the generic error page.
-function uploadMiddleware(middleware, maxSizeLabel, onError) {
+function uploadMiddleware(middleware, maxSizeLabel, onError, maxFiles) {
   return (req, res, next) => {
     middleware(req, res, (error) => {
       if (!error) {
         next();
         return;
       }
-      onError(req, res, uploadErrorMessage(error, maxSizeLabel));
+      onError(req, res, uploadErrorMessage(error, maxSizeLabel, maxFiles));
     });
   };
 }
@@ -1720,6 +1824,288 @@ app.get('/files', (_req, res) => {
     fileCount: new Set(files.map((file) => file.id)).size,
     formatBytes
   });
+});
+
+function getLibraryFile(id) {
+  const file = db
+    .prepare(`
+      SELECT lf.*, d.name AS department_name
+      FROM library_files lf
+      LEFT JOIN departments d ON d.id = lf.department_id
+      WHERE lf.id = ?
+    `)
+    .get(id);
+  return file ? decorateLibraryFile(file) : null;
+}
+
+const LIBRARY_BADGE_FAMILIES = {
+  Word: 'doc',
+  Document: 'doc',
+  Excel: 'sheet',
+  Spreadsheet: 'sheet',
+  CSV: 'sheet',
+  PowerPoint: 'slides',
+  Presentation: 'slides',
+  PDF: 'pdf',
+  Image: 'image',
+  Text: 'text'
+};
+
+function decorateLibraryFile(file) {
+  const type = libraryTypeFor(file.filename);
+  return {
+    ...file,
+    typeLabel: type ? type.label : 'File',
+    viewer: type ? type.viewer : '',
+    extension: path.extname(file.filename).slice(1).toUpperCase(),
+    badgeFamily: (type && LIBRARY_BADGE_FAMILIES[type.label]) || 'text'
+  };
+}
+
+function libraryFilePath(filename) {
+  const safeFilename = normalizeFilename(filename);
+  const filePath = path.join(LIBRARY_DIR, safeFilename);
+  return safeFilename && isPathInside(LIBRARY_DIR, filePath) ? filePath : '';
+}
+
+function removeLibraryFile(filename) {
+  const filePath = libraryFilePath(filename);
+  if (filePath) {
+    fs.rm(filePath, { force: true }, () => {});
+  }
+}
+
+// Library files without a department are shown under "General".
+function libraryDepartmentId(value) {
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 && validDepartmentIds([id]).length > 0 ? id : null;
+}
+
+function libraryFormOptions() {
+  return {
+    departments: getDepartments(),
+    acceptList: libraryAcceptList(),
+    extensionsLabel: libraryExtensionsLabel(),
+    maxFiles: MAX_LIBRARY_FILES,
+    maxFileSize: MAX_LIBRARY_FILE_SIZE,
+    formatBytes
+  };
+}
+
+app.get('/library', (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const department = String(req.query.department || 'all');
+  const where = [];
+  const params = [];
+
+  if (q) {
+    const pattern = likePattern(q);
+    where.push("(lf.title LIKE ? ESCAPE '\\' OR lf.description LIKE ? ESCAPE '\\' OR lf.original_filename LIKE ? ESCAPE '\\')");
+    params.push(pattern, pattern, pattern);
+  }
+  if (department === 'general') {
+    where.push('lf.department_id IS NULL');
+  } else if (department !== 'all') {
+    where.push('lf.department_id = ?');
+    params.push(Number(department) || 0);
+  }
+
+  const files = db
+    .prepare(`
+      SELECT lf.*, d.name AS department_name
+      FROM library_files lf
+      LEFT JOIN departments d ON d.id = lf.department_id
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY lower(lf.title), lf.id
+    `)
+    .all(...params)
+    .map(decorateLibraryFile);
+
+  const groups = new Map([['general', { key: 'general', name: 'General', files: [] }]]);
+  for (const dept of getDepartments()) {
+    groups.set(dept.id, { key: String(dept.id), name: dept.name, files: [] });
+  }
+  for (const file of files) {
+    groups.get(file.department_id === null ? 'general' : file.department_id).files.push(file);
+  }
+
+  res.render('library', {
+    ...libraryFormOptions(),
+    groups: [...groups.values()].filter((group) => group.files.length > 0),
+    fileCount: files.length,
+    totalCount: db.prepare('SELECT COUNT(*) AS count FROM library_files').get().count,
+    filters: { q, department }
+  });
+});
+
+app.post(
+  '/library',
+  uploadMiddleware(
+    libraryUpload.array('files', MAX_LIBRARY_FILES),
+    formatBytes(MAX_LIBRARY_FILE_SIZE),
+    redirectOnUploadError('/library'),
+    MAX_LIBRARY_FILES
+  ),
+  requireCsrf,
+  (req, res) => {
+    const files = req.files || [];
+    if (files.length === 0) {
+      setFlash(req, 'error', 'Choose at least one file to upload.');
+      redirectTo(req, res, '/library');
+      return;
+    }
+
+    const departmentId = libraryDepartmentId(req.body.department_id);
+    const description = String(req.body.description || '').trim().slice(0, 500);
+    // One title per file, in the order the files were chosen; a blank title falls back to a tidied file name.
+    const titles = [].concat(req.body.titles || []).map((title) => String(title).trim().slice(0, 160));
+    const insert = db.prepare(`
+      INSERT INTO library_files (department_id, title, description, filename, original_filename, mime_type, size, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const timestamp = nowIso();
+    db.transaction(() => {
+      files.forEach((file, index) => {
+        const originalFilename = cleanDisplayFilename(file.originalname);
+        insert.run(
+          departmentId,
+          titles[index] || titleFromFilename(originalFilename),
+          description,
+          normalizeFilename(file.filename),
+          originalFilename,
+          libraryTypeFor(file.filename).mimeType,
+          file.size,
+          timestamp,
+          timestamp
+        );
+      });
+    })();
+
+    setFlash(req, 'success', files.length === 1 ? 'File added to the Library.' : `${files.length} files added to the Library.`);
+    redirectTo(req, res, '/library');
+  }
+);
+
+app.get('/library/:id(\\d+)', async (req, res, next) => {
+  try {
+    const file = getLibraryFile(Number(req.params.id));
+    if (!file) {
+      setFlash(req, 'error', 'That library file could not be found.');
+      redirectTo(req, res, '/library');
+      return;
+    }
+    res.render('library-view', {
+      file,
+      preview: await buildPreview(libraryFilePath(file.filename), file),
+      formatBytes
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// The trailing name is ignored; it only gives the browser's PDF viewer and "Save as" a readable file name.
+app.get('/library/:id(\\d+)/file/:name?', (req, res) => {
+  const file = getLibraryFile(Number(req.params.id));
+  const filePath = file ? libraryFilePath(file.filename) : '';
+  if (!filePath || !fs.existsSync(filePath)) {
+    res.status(404).send('Not found');
+    return;
+  }
+
+  // Only PDFs, images, and plain text are shown by the browser; Office files always download.
+  const type = libraryTypeFor(file.filename);
+  const inline = Boolean(type) && INLINE_VIEWERS.has(type.viewer) && req.query.download !== '1';
+  res.set('Content-Disposition', contentDisposition(file.original_filename, { type: inline ? 'inline' : 'attachment' }));
+  if (!type) {
+    res.type('application/octet-stream');
+  } else if (type.viewer === 'text') {
+    res.type('text/plain; charset=utf-8');
+  } else {
+    res.type(type.mimeType);
+  }
+  res.sendFile(filePath);
+});
+
+app.get('/library/:id(\\d+)/edit', (req, res) => {
+  const file = getLibraryFile(Number(req.params.id));
+  if (!file) {
+    setFlash(req, 'error', 'That library file could not be found.');
+    redirectTo(req, res, '/library');
+    return;
+  }
+  res.render('library-edit', { ...libraryFormOptions(), file });
+});
+
+app.post(
+  '/library/:id(\\d+)',
+  uploadMiddleware(
+    libraryUpload.single('file'),
+    formatBytes(MAX_LIBRARY_FILE_SIZE),
+    (req, res, message) => {
+      setFlash(req, 'error', message);
+      redirectTo(req, res, `/library/${req.params.id}/edit`);
+    },
+    1
+  ),
+  requireCsrf,
+  (req, res) => {
+    const id = Number(req.params.id);
+    const existing = getLibraryFile(id);
+    if (!existing) {
+      removeUploadedFiles(req.file ? [req.file] : []);
+      setFlash(req, 'error', 'That library file could not be found.');
+      redirectTo(req, res, '/library');
+      return;
+    }
+
+    const title = String(req.body.title || '').trim().slice(0, 160) || existing.title;
+    const description = String(req.body.description || '').trim().slice(0, 500);
+    const departmentId = libraryDepartmentId(req.body.department_id);
+    const timestamp = nowIso();
+
+    if (req.file) {
+      db.prepare(`
+        UPDATE library_files
+        SET title = ?, description = ?, department_id = ?, filename = ?, original_filename = ?, mime_type = ?, size = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        title,
+        description,
+        departmentId,
+        normalizeFilename(req.file.filename),
+        cleanDisplayFilename(req.file.originalname),
+        libraryTypeFor(req.file.filename).mimeType,
+        req.file.size,
+        timestamp,
+        id
+      );
+      removeLibraryFile(existing.filename);
+    } else {
+      db.prepare(`
+        UPDATE library_files
+        SET title = ?, description = ?, department_id = ?, updated_at = ?
+        WHERE id = ?
+      `).run(title, description, departmentId, timestamp, id);
+    }
+
+    setFlash(req, 'success', req.file ? 'Library file replaced.' : 'Library file updated.');
+    redirectTo(req, res, `/library/${id}`);
+  }
+);
+
+app.post('/library/:id(\\d+)/delete', (req, res) => {
+  const file = getLibraryFile(Number(req.params.id));
+  if (!file) {
+    setFlash(req, 'error', 'That library file could not be found.');
+    redirectTo(req, res, '/library');
+    return;
+  }
+
+  db.prepare('DELETE FROM library_files WHERE id = ?').run(file.id);
+  removeLibraryFile(file.filename);
+  setFlash(req, 'success', `${file.title} was removed from the Library.`);
+  redirectTo(req, res, '/library');
 });
 
 app.get('/issues/new', (_req, res) => {

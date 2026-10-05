@@ -1480,3 +1480,331 @@ body.viewer-open {
 .toast[role="alert"] {
   max-width: min(560px, calc(100vw - 32px));
 }
+
+.upload-panel summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.upload-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.upload-panel summary::before {
+  content: "+";
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.upload-panel[open] summary::before {
+  content: "\2212";
+}
+
+.upload-panel[open] summary {
+  margin-bottom: 16px;
+}
+
+.upload-panel {
+  margin-bottom: 18px;
+}
+
+.upload-grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 260px) 1fr;
+  gap: 12px;
+}
+
+.optional {
+  font-weight: 500;
+}
+
+.library-controls {
+  grid-template-columns: minmax(220px, 1fr) minmax(160px, 220px) auto;
+}
+
+.library-row {
+  flex-wrap: nowrap;
+}
+
+.file-badge {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius);
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-decoration: none;
+  color: var(--badge);
+  background: color-mix(in srgb, var(--badge) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--badge) 38%, transparent);
+}
+
+.file-badge-doc { --badge: #5b9dff; }
+.file-badge-sheet { --badge: #3fbf73; }
+.file-badge-pdf { --badge: #ff6b6b; }
+.file-badge-slides { --badge: #f0914a; }
+.file-badge-image { --badge: #b58cff; }
+.file-badge-text { --badge: var(--muted); }
+
+:root[data-theme="light"] .file-badge-doc { --badge: #1f5fc4; }
+:root[data-theme="light"] .file-badge-sheet { --badge: #16794a; }
+:root[data-theme="light"] .file-badge-pdf { --badge: #c42f3a; }
+:root[data-theme="light"] .file-badge-slides { --badge: #b4541a; }
+:root[data-theme="light"] .file-badge-image { --badge: #7042c9; }
+
+.library-description {
+  color: var(--text);
+  font-size: 0.94rem;
+}
+
+.page-heading .library-description {
+  margin: 8px 0 0;
+  max-width: 70ch;
+}
+
+.library-title {
+  overflow-wrap: anywhere;
+}
+
+.doc-note {
+  margin: 0 0 12px;
+}
+
+.doc-frame {
+  display: block;
+  width: 100%;
+  height: calc(100vh - 220px);
+  min-height: 520px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.doc-image-wrap {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: center;
+}
+
+.doc-image {
+  max-width: 100%;
+  max-height: calc(100vh - 220px);
+  margin: 0 auto;
+}
+
+/* Word documents read like a printed page in both themes. */
+.doc-page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: clamp(20px, 5vw, 64px);
+  border-radius: 4px;
+  color: #1d2320;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.doc-page a {
+  color: #1f5fc4;
+}
+
+.doc-page img {
+  max-width: 100%;
+  height: auto;
+}
+
+.doc-page table {
+  width: 100%;
+  margin: 12px 0;
+  border-collapse: collapse;
+}
+
+.doc-page td,
+.doc-page th {
+  padding: 6px 8px;
+  border: 1px solid #c9cfc8;
+  vertical-align: top;
+}
+
+.doc-page td > p,
+.doc-page th > p {
+  margin: 0;
+}
+
+.sheet-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  margin-bottom: -1px;
+}
+
+.sheet-tabs button {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius) var(--radius) 0 0;
+  color: var(--muted);
+  background: var(--surface-strong);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sheet-tabs button[aria-selected="true"] {
+  color: var(--text);
+  background: var(--surface);
+  border-bottom-color: var(--surface);
+}
+
+.sheet-panel > .field-hint {
+  margin-top: 10px;
+}
+
+.sheet-scroll {
+  max-height: calc(100vh - 240px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 0 var(--radius) var(--radius) var(--radius);
+  background: var(--surface);
+}
+
+/* Spreadsheet preview styled like a grid, with column letters and row numbers. */
+.sheet-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.86rem;
+}
+
+.sheet-table-sized {
+  table-layout: fixed;
+}
+
+.sheet-table td,
+.sheet-table th {
+  padding: 3px 5px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  white-space: pre-wrap;
+}
+
+/* Like Excel: wrap at spaces, and clip a word that is wider than its column instead of splitting it. */
+.sheet-table-sized td {
+  overflow: hidden;
+}
+
+.sheet-table td.sheet-number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.sheet-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  color: var(--muted);
+  background: var(--surface-strong);
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.sheet-table tbody th {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  color: var(--muted);
+  background: var(--surface-strong);
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.sheet-table thead th.sheet-corner {
+  left: 0;
+  z-index: 3;
+}
+
+.doc-text {
+  margin: 0;
+  padding: 18px;
+  max-height: calc(100vh - 220px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.92rem;
+}
+
+@media (max-width: 920px) {
+  .upload-grid,
+  .library-controls {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .library-row {
+    flex-wrap: wrap;
+  }
+
+  .library-row .backup-row-actions {
+    width: 100%;
+  }
+
+  .doc-frame {
+    min-height: 420px;
+  }
+}
+
+.page-heading .backup-row-actions a {
+  white-space: nowrap;
+}
+
+.page-heading > .primary-button {
+  white-space: nowrap;
+}
+
+.library-titles {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-soft);
+}
+
+.library-titles[hidden] {
+  display: none;
+}
+
+.library-titles legend {
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.library-titles .field-hint {
+  margin: 0;
+}
+
+.library-titles label {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}

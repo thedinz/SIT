@@ -62,6 +62,8 @@
       root.setAttribute('data-theme', nextTheme);
       saveTheme(nextTheme);
       refreshThemeButton();
+      const themeColor = document.querySelector('meta[name="theme-color"]');
+      if (themeColor) themeColor.setAttribute('content', nextTheme === 'light' ? '#ffffff' : '#111823');
     }
 
     const toastButton = event.target.closest('[data-dismiss-toast]');
@@ -311,4 +313,172 @@
       }
     });
   });
+
+  // Phones and tablets only; desktop keeps opening files in a new tab.
+  const touchLayout = window.matchMedia('(max-width: 760px), (hover: none) and (pointer: coarse)');
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+  // Full-screen image viewer for the Files page: fits the screen, swipes between images, back button closes it.
+  // Pinch-zoom is left to the browser; swipes are ignored while zoomed so panning still works.
+  const viewerLinks = Array.from(document.querySelectorAll('[data-viewer-image]'));
+  if (viewerLinks.length > 0) {
+    let viewer = null;
+    let group = [];
+    let index = 0;
+    let touchStart = null;
+
+    function buildViewer() {
+      viewer = document.createElement('div');
+      viewer.className = 'image-viewer';
+      viewer.setAttribute('role', 'dialog');
+      viewer.setAttribute('aria-modal', 'true');
+      viewer.setAttribute('aria-label', 'Image viewer');
+      viewer.hidden = true;
+      viewer.innerHTML =
+        '<div class="viewer-bar">' +
+        '<button class="viewer-button" type="button" data-viewer-close aria-label="Close">Close</button>' +
+        '<div class="viewer-title"><strong data-viewer-name></strong><span data-viewer-count></span></div>' +
+        '<a class="viewer-button" data-viewer-open target="_blank" rel="noopener noreferrer">Open</a>' +
+        '</div>' +
+        '<div class="viewer-stage" data-viewer-stage><img data-viewer-img alt=""></div>' +
+        '<div class="viewer-bar viewer-nav">' +
+        '<button class="viewer-button" type="button" data-viewer-prev aria-label="Previous image">Prev</button>' +
+        '<button class="viewer-button" type="button" data-viewer-next aria-label="Next image">Next</button>' +
+        '</div>';
+      document.body.appendChild(viewer);
+
+      viewer.querySelector('[data-viewer-close]').addEventListener('click', closeViewer);
+      viewer.querySelector('[data-viewer-prev]').addEventListener('click', function () { show(index - 1); });
+      viewer.querySelector('[data-viewer-next]').addEventListener('click', function () { show(index + 1); });
+
+      const stage = viewer.querySelector('[data-viewer-stage]');
+      stage.addEventListener('touchstart', function (event) {
+        touchStart = event.touches.length === 1 ? { x: event.touches[0].clientX, y: event.touches[0].clientY } : null;
+      }, { passive: true });
+      stage.addEventListener('touchend', function (event) {
+        const zoomed = window.visualViewport && window.visualViewport.scale > 1.05;
+        if (!touchStart || zoomed || event.changedTouches.length !== 1) return;
+        const dx = event.changedTouches[0].clientX - touchStart.x;
+        const dy = event.changedTouches[0].clientY - touchStart.y;
+        touchStart = null;
+        if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+          show(index + (dx < 0 ? 1 : -1));
+        } else if (dy > 90 && Math.abs(dy) > Math.abs(dx) * 1.5) {
+          closeViewer();
+        }
+      });
+    }
+
+    function show(nextIndex) {
+      if (nextIndex < 0 || nextIndex >= group.length) return;
+      index = nextIndex;
+      const link = group[index];
+      viewer.querySelector('[data-viewer-img]').src = link.href;
+      viewer.querySelector('[data-viewer-img]').alt = link.textContent;
+      viewer.querySelector('[data-viewer-name]').textContent = link.textContent;
+      viewer.querySelector('[data-viewer-count]').textContent = group.length > 1 ? (index + 1) + ' of ' + group.length : '';
+      viewer.querySelector('[data-viewer-open]').href = link.href;
+      viewer.querySelector('[data-viewer-prev]').disabled = index === 0;
+      viewer.querySelector('[data-viewer-next]').disabled = index === group.length - 1;
+      viewer.querySelector('.viewer-nav').hidden = group.length < 2;
+    }
+
+    function openViewer(link) {
+      if (!viewer) buildViewer();
+      const list = link.closest('.files-list');
+      group = list ? Array.from(list.querySelectorAll('[data-viewer-image]')) : [link];
+      show(group.indexOf(link));
+      viewer.hidden = false;
+      document.body.classList.add('viewer-open');
+      // A history entry lets the phone's back gesture close the viewer instead of leaving the page.
+      window.history.pushState({ imageViewer: true }, '');
+      viewer.querySelector('[data-viewer-close]').focus();
+    }
+
+    function hideViewer() {
+      if (!viewer || viewer.hidden) return;
+      viewer.hidden = true;
+      viewer.querySelector('[data-viewer-img]').removeAttribute('src');
+      document.body.classList.remove('viewer-open');
+      if (group[index]) group[index].focus();
+    }
+
+    function closeViewer() {
+      if (window.history.state && window.history.state.imageViewer) {
+        window.history.back();
+      } else {
+        hideViewer();
+      }
+    }
+
+    window.addEventListener('popstate', hideViewer);
+
+    document.addEventListener('keydown', function (event) {
+      if (!viewer || viewer.hidden) return;
+      if (event.key === 'Escape') closeViewer();
+      if (event.key === 'ArrowLeft') show(index - 1);
+      if (event.key === 'ArrowRight') show(index + 1);
+    });
+
+    viewerLinks.forEach(function (link) {
+      link.addEventListener('click', function (event) {
+        if (!touchLayout.matches || event.metaKey || event.ctrlKey || event.shiftKey) return;
+        event.preventDefault();
+        openViewer(link);
+      });
+    });
+  }
+
+  // Offers "add to home screen" on phones: Android gets an Install button, iOS gets the Share-menu steps.
+  const installHint = document.querySelector('[data-install-hint]');
+  if (installHint && touchLayout.matches && !isStandalone) {
+    let dismissed = false;
+    try {
+      dismissed = window.localStorage.getItem('sit-install-dismissed') === '1';
+    } catch (_error) {
+      // Without storage the hint simply shows again next visit.
+    }
+
+    if (!dismissed) {
+      const installButton = installHint.querySelector('[data-install-button]');
+      const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      let deferredPrompt = null;
+
+      if (isIos) {
+        installHint.querySelector('[data-install-text]').textContent =
+          'To open Files like an app, tap the Share button, then "Add to Home Screen".';
+        installHint.hidden = false;
+      }
+
+      window.addEventListener('beforeinstallprompt', function (event) {
+        event.preventDefault();
+        deferredPrompt = event;
+        installButton.hidden = false;
+        installHint.hidden = false;
+      });
+
+      installButton.addEventListener('click', function () {
+        if (!deferredPrompt) return;
+        deferredPrompt.prompt();
+        deferredPrompt.userChoice.finally(function () {
+          deferredPrompt = null;
+          installHint.hidden = true;
+        });
+      });
+
+      window.addEventListener('appinstalled', function () {
+        installHint.hidden = true;
+      });
+
+      installHint.querySelector('[data-install-dismiss]').addEventListener('click', function () {
+        installHint.hidden = true;
+        try {
+          window.localStorage.setItem('sit-install-dismissed', '1');
+        } catch (_error) {
+          // Nothing to remember it in; hiding it for this visit is enough.
+        }
+      });
+    }
+  }
 })();

@@ -250,6 +250,36 @@ test('changing the password signs out other devices', async () => {
   assert.match(stale.headers.get('location'), /login/);
 });
 
+test('signing in returns to the page that asked for it', async () => {
+  const blocked = await otherDevice.request('/files');
+  assert.match(blocked.headers.get('location'), /login/);
+
+  const signedIn = await otherDevice.login(NEW_PASSWORD);
+  assert.match(signedIn.headers.get('location'), /files$/);
+
+  // Background file requests while signed out must not hijack where login lands.
+  await otherDevice.post('/logout', {}, '/files');
+  await otherDevice.request('/files');
+  await otherDevice.request('/uploads/missing.png');
+  const again = await otherDevice.login(NEW_PASSWORD);
+  assert.match(again.headers.get('location'), /files$/);
+});
+
+test('phones can install the tracker from the manifest without signing in', async () => {
+  const response = await fetch(`${baseUrl}/manifest.webmanifest`);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type'), /application\/manifest\+json/);
+  const manifest = await response.json();
+  assert.equal(manifest.start_url, 'files');
+  assert.equal(manifest.display, 'standalone');
+  for (const icon of manifest.icons) {
+    assert.equal((await fetch(`${baseUrl}/${icon.src}`)).status, 200, icon.src);
+  }
+
+  const { text } = await admin.page('/files');
+  assert.match(text, /rel="manifest"/);
+});
+
 test('a rejected issue keeps what was typed', async () => {
   const response = await admin.postMultipart('/issues', {
     poster_name: 'Sam',

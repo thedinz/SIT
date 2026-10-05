@@ -9,6 +9,14 @@
   <a class="primary-button compact" href="<%= urlFor('/issues/new') %>">Add Issue</a>
 </section>
 
+<aside class="install-hint" data-install-hint hidden>
+  <p data-install-text>Add Files to your home screen to open it like an app.</p>
+  <div class="install-hint-actions">
+    <button class="primary-button compact" type="button" data-install-button hidden>Install</button>
+    <button class="secondary-button compact" type="button" data-install-dismiss>Not now</button>
+  </div>
+</aside>
+
 <% if (fileCount === 0) { %>
   <section class="empty-state">
     <h2>No files yet</h2>
@@ -17,7 +25,7 @@
 <% } else { %>
   <div class="stack">
     <% departments.forEach((department) => { %>
-      <section class="settings-card" aria-labelledby="department-<%= department.id %>">
+      <section class="settings-card files-card" aria-labelledby="department-<%= department.id %>">
         <div class="files-department-heading">
           <h2 id="department-<%= department.id %>"><%= department.name %></h2>
           <span class="muted"><%= department.files.length %> <%= department.files.length === 1 ? 'file' : 'files' %></span>
@@ -27,10 +35,17 @@
         <% } else { %>
           <ul class="files-list">
             <% department.files.forEach((file) => { %>
+              <% const fileUrl = urlFor(`/uploads/${encodeURIComponent(file.filename)}`); %>
+              <% const isPdf = file.mime_type === 'application/pdf'; %>
               <li class="file-row">
+                <% if (isPdf) { %>
+                  <span class="file-thumb file-thumb-pdf" aria-hidden="true">PDF</span>
+                <% } else { %>
+                  <img class="file-thumb" src="<%= fileUrl %>" alt="" loading="lazy" decoding="async">
+                <% } %>
                 <div class="file-details">
-                  <a class="file-link" href="<%= urlFor(`/uploads/${encodeURIComponent(file.filename)}`) %>" target="_blank" rel="noopener noreferrer"><%= file.original_filename %></a>
-                  <span class="muted"><%= file.mime_type === 'application/pdf' ? 'PDF' : 'Image' %> &middot; <%= formatBytes(file.size) %> &middot; Uploaded <%- localTime(file.uploaded_at) %></span>
+                  <a class="file-link" href="<%= fileUrl %>" target="_blank" rel="noopener noreferrer" <%- isPdf ? '' : 'data-viewer-image' %>><%= file.original_filename %></a>
+                  <span class="muted"><%= isPdf ? 'PDF' : 'Image' %> &middot; <%= formatBytes(file.size) %> &middot; Uploaded <%- localTime(file.uploaded_at) %></span>
                 </div>
                 <a class="secondary-button compact" href="<%= urlFor(`/issues/${file.issue_id}/edit`) %>">Issue #<%= file.issue_id %></a>
               </li>

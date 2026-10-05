@@ -5,7 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title><%= typeof title !== 'undefined' && title ? `${title} | ${displayTitle}` : displayTitle %></title>
     <link rel="icon" href="<%= faviconUrl %>">
-    <link rel="apple-touch-icon" href="<%= faviconUrl %>">
+    <link rel="apple-touch-icon" href="<%= touchIconUrl %>">
+    <link rel="manifest" href="<%= urlFor('/manifest.webmanifest') %>">
+    <meta name="theme-color" content="<%= theme === 'light' ? '#ffffff' : '#111823' %>">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="<%= displayTitle %>">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <link rel="stylesheet" href="<%= urlFor(`/css/styles.css?v=${assetVersion}`) %>">
     <script defer src="<%= urlFor(`/js/app.js?v=${assetVersion}`) %>"></script>
   </head>

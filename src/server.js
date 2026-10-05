@@ -54,7 +54,7 @@ const BACKUP_FILENAME_PREFIX = 'simple-issue-tracker-backup-';
 const SCHEDULED_BACKUP_CHECK_MS = 60 * 60 * 1000;
 const SCHEDULED_BACKUP_RETENTION = 30;
 const PRE_RESTORE_BACKUP_RETENTION = 5;
-const ASSET_VERSION = '20260928-1';
+const ASSET_VERSION = '20261004-1';
 const THEME_COOKIE = 'sit_theme';
 const DEPARTMENT_SEPARATOR = '\u001f';
 // Settings that belong to this server rather than to the data, so they are never exported or restored.
@@ -324,6 +324,10 @@ function signOutOtherSessions(req) {
   }
 }
 
+function isSafeReturnPath(value) {
+  return typeof value === 'string' && /^\/(?![/\\])/.test(value);
+}
+
 function requireAuth(req, res, next) {
   if (isAuthenticated(req)) {
     next();
@@ -332,6 +336,10 @@ function requireAuth(req, res, next) {
   if (req.session.authenticated) {
     delete req.session.authenticated;
     delete req.session.sessionVersion;
+  }
+  // Remember the page so a home-screen launch straight to Files lands back there after signing in.
+  if (req.method === 'GET' && isSafeReturnPath(req.url) && !/^\/(uploads|settings\/backups)\//.test(req.path)) {
+    req.session.returnTo = req.url;
   }
   redirectTo(req, res, '/login');
 }
@@ -1461,6 +1469,8 @@ app.use((req, res, next) => {
   const logoFilename = configuredLogoFilename();
   res.locals.logoUrl = logoFilename ? urlFor(req, `/logo/${encodeURIComponent(logoFilename)}`) : '';
   res.locals.faviconUrl = urlFor(req, `/site-icon?v=${encodeURIComponent(logoFilename || ASSET_VERSION)}`);
+  // iOS ignores SVG home-screen icons, so use the PNG unless a logo has been uploaded.
+  res.locals.touchIconUrl = logoFilename ? res.locals.faviconUrl : urlFor(req, '/icons/apple-touch-icon.png');
   next();
 });
 
@@ -1507,9 +1517,11 @@ app.post('/login', async (req, res, next) => {
     if (await bcrypt.compare(password, getSetting('password_hash'))) {
       console.info(`Shared login succeeded from ${req.ip}`);
       loginFailures.delete(req.ip);
+      const returnTo = isSafeReturnPath(req.session.returnTo) ? req.session.returnTo : '/';
+      delete req.session.returnTo;
       signIn(req);
       setFlash(req, 'success', 'You are logged in.');
-      redirectTo(req, res, '/');
+      redirectTo(req, res, returnTo);
       return;
     }
 
@@ -1535,6 +1547,32 @@ app.get('/logo/:filename', (req, res) => {
     return;
   }
   res.sendFile(path.join(LOGO_DIR, filename));
+});
+
+// Lets phones install the tracker to the home screen; it opens on the Files page like an app.
+// Relative URLs resolve against this file, so it also works when the tracker is served under a sub-path.
+app.get('/manifest.webmanifest', (_req, res) => {
+  const displayTitle = getSetting('display_title', APP_NAME);
+  const logoFilename = configuredLogoFilename();
+  const icons = [
+    { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+    { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+    { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
+  ];
+  if (logoFilename) {
+    icons.unshift({ src: `logo/${encodeURIComponent(logoFilename)}`, sizes: 'any', purpose: 'any' });
+  }
+  res.type('application/manifest+json').send(JSON.stringify({
+    id: 'files',
+    name: displayTitle,
+    short_name: displayTitle.length > 12 ? 'Files' : displayTitle,
+    start_url: 'files',
+    scope: './',
+    display: 'standalone',
+    background_color: '#080b10',
+    theme_color: '#111823',
+    icons
+  }));
 });
 
 app.get(['/site-icon', '/favicon.ico'], (_req, res) => {

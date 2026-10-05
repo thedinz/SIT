@@ -418,13 +418,29 @@
     });
   });
 
-  // Phones and tablets only; desktop keeps opening files in a new tab.
+  // Phones and tablets only; desktop keeps opening files in a new tab. Keep in step with the matching CSS media query.
   const touchLayout = window.matchMedia('(max-width: 760px), (hover: none) and (pointer: coarse)');
+  const phoneLayout = window.matchMedia('(max-width: 760px)');
   const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
 
-  // Full-screen image viewer for the Files page: fits the screen, swipes between images, back button closes it.
+  // Overlays on phones get a history entry, so the back button or gesture closes them instead of leaving the page.
+  function pushOverlayState(name) {
+    window.history.pushState({ overlay: name }, '');
+  }
+
+  function closeOverlay(name, hide) {
+    if (window.history.state && window.history.state.overlay === name) {
+      window.history.back();
+    } else {
+      hide();
+    }
+  }
+
+  // Full-screen image viewer: fits the screen, swipes between images, back button closes it.
   // Pinch-zoom is left to the browser; swipes are ignored while zoomed so panning still works.
-  const viewerLinks = Array.from(document.querySelectorAll('[data-viewer-image]'));
+  const viewerLinks = Array.from(document.querySelectorAll('[data-viewer-image], [data-viewer-src]'));
+  const viewerSource = function (element) { return element.getAttribute('data-viewer-src') || element.href; };
+  const viewerName = function (element) { return element.getAttribute('data-viewer-name') || element.textContent.trim(); };
   if (viewerLinks.length > 0) {
     let viewer = null;
     let group = [];
@@ -477,11 +493,11 @@
       if (nextIndex < 0 || nextIndex >= group.length) return;
       index = nextIndex;
       const link = group[index];
-      viewer.querySelector('[data-viewer-img]').src = link.href;
-      viewer.querySelector('[data-viewer-img]').alt = link.textContent;
-      viewer.querySelector('[data-viewer-name]').textContent = link.textContent;
+      viewer.querySelector('[data-viewer-img]').src = viewerSource(link);
+      viewer.querySelector('[data-viewer-img]').alt = viewerName(link);
+      viewer.querySelector('[data-viewer-name]').textContent = viewerName(link);
       viewer.querySelector('[data-viewer-count]').textContent = group.length > 1 ? (index + 1) + ' of ' + group.length : '';
-      viewer.querySelector('[data-viewer-open]').href = link.href;
+      viewer.querySelector('[data-viewer-open]').href = viewerSource(link);
       viewer.querySelector('[data-viewer-prev]').disabled = index === 0;
       viewer.querySelector('[data-viewer-next]').disabled = index === group.length - 1;
       viewer.querySelector('.viewer-nav').hidden = group.length < 2;
@@ -494,8 +510,7 @@
       show(group.indexOf(link));
       viewer.hidden = false;
       document.body.classList.add('viewer-open');
-      // A history entry lets the phone's back gesture close the viewer instead of leaving the page.
-      window.history.pushState({ imageViewer: true }, '');
+      pushOverlayState('image');
       viewer.querySelector('[data-viewer-close]').focus();
     }
 
@@ -504,15 +519,11 @@
       viewer.hidden = true;
       viewer.querySelector('[data-viewer-img]').removeAttribute('src');
       document.body.classList.remove('viewer-open');
-      if (group[index]) group[index].focus();
+      if (group[index] && group[index].focus) group[index].focus();
     }
 
     function closeViewer() {
-      if (window.history.state && window.history.state.imageViewer) {
-        window.history.back();
-      } else {
-        hideViewer();
-      }
+      closeOverlay('image', hideViewer);
     }
 
     window.addEventListener('popstate', hideViewer);
@@ -531,6 +542,251 @@
         openViewer(link);
       });
     });
+  }
+
+  function shareLink(title, url) {
+    navigator.share({ title: title, url: new URL(url, window.location.href).href }).catch(function () {
+      // Closing the share sheet without choosing anything is not an error worth reporting.
+    });
+  }
+
+  document.querySelectorAll('[data-share-link]').forEach(function (button) {
+    if (!touchLayout.matches || !navigator.share) return;
+    button.hidden = false;
+    button.addEventListener('click', function () {
+      shareLink(button.getAttribute('data-title') || document.title, window.location.href);
+    });
+  });
+
+  // Drive-style action sheet for a Library file on phones (the row's own buttons are hidden there).
+  const menuButtons = document.querySelectorAll('[data-file-menu]');
+  if (menuButtons.length > 0) {
+    let sheet = null;
+    let opener = null;
+
+    function hideSheet() {
+      if (!sheet || sheet.hidden) return;
+      sheet.hidden = true;
+      document.body.classList.remove('viewer-open');
+      if (opener) opener.focus();
+    }
+
+    function closeSheet() {
+      closeOverlay('file-menu', hideSheet);
+    }
+
+    function buildSheet() {
+      sheet = document.createElement('div');
+      sheet.className = 'action-sheet';
+      sheet.hidden = true;
+      sheet.innerHTML =
+        '<div class="action-sheet-backdrop" data-sheet-close></div>' +
+        '<div class="action-sheet-panel" role="dialog" aria-modal="true" aria-labelledby="action-sheet-title">' +
+        '<p class="action-sheet-title" id="action-sheet-title" data-sheet-title></p>' +
+        '<a class="action-sheet-item" data-sheet-open>Open</a>' +
+        '<a class="action-sheet-item" data-sheet-download>Download</a>' +
+        '<button class="action-sheet-item" type="button" data-sheet-share hidden>Share link</button>' +
+        '<a class="action-sheet-item" data-sheet-edit>Edit details or replace</a>' +
+        '<button class="action-sheet-item action-sheet-cancel" type="button" data-sheet-close>Cancel</button>' +
+        '</div>';
+      document.body.appendChild(sheet);
+      sheet.querySelectorAll('[data-sheet-close]').forEach(function (element) {
+        element.addEventListener('click', closeSheet);
+      });
+      sheet.querySelector('[data-sheet-share]').addEventListener('click', function () {
+        shareLink(opener.getAttribute('data-title'), opener.getAttribute('data-open'));
+        closeSheet();
+      });
+      // The links leave the page, so drop the sheet's history entry first or Back would land on an open sheet.
+      sheet.querySelectorAll('a.action-sheet-item').forEach(function (link) {
+        link.addEventListener('click', function (event) {
+          if (!(window.history.state && window.history.state.overlay === 'file-menu')) return;
+          event.preventDefault();
+          const href = link.href;
+          window.addEventListener('popstate', function go() {
+            window.removeEventListener('popstate', go);
+            window.location.href = href;
+          });
+          window.history.back();
+        });
+      });
+    }
+
+    window.addEventListener('popstate', hideSheet);
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && sheet && !sheet.hidden) closeSheet();
+    });
+
+    menuButtons.forEach(function (button) {
+      button.addEventListener('click', function () {
+        if (!sheet) buildSheet();
+        opener = button;
+        sheet.querySelector('[data-sheet-title]').textContent = button.getAttribute('data-title');
+        sheet.querySelector('[data-sheet-open]').href = button.getAttribute('data-open');
+        sheet.querySelector('[data-sheet-download]').href = button.getAttribute('data-download');
+        sheet.querySelector('[data-sheet-edit]').href = button.getAttribute('data-edit');
+        sheet.querySelector('[data-sheet-share]').hidden = !navigator.share;
+        sheet.hidden = false;
+        document.body.classList.add('viewer-open');
+        pushOverlayState('file-menu');
+        sheet.querySelector('[data-sheet-open]').focus();
+      });
+    });
+  }
+
+  // Phones show only the Dashboard search until Filters is tapped.
+  document.querySelectorAll('[data-filter-toggle]').forEach(function (button) {
+    const form = button.closest('[data-filter-form]');
+    button.addEventListener('click', function () {
+      const open = form.classList.toggle('filters-open');
+      button.setAttribute('aria-expanded', String(open));
+    });
+  });
+
+  // The floating Upload button on phones opens the upload form and brings it into view.
+  const uploadFab = document.querySelector('[data-upload-fab]');
+  const uploadPanel = document.getElementById('upload');
+  if (uploadFab && uploadPanel) {
+    uploadFab.addEventListener('click', function () {
+      uploadPanel.open = true;
+      uploadPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+
+  // PDFs scroll properly in a frame only on desktop; phones and tablets open them in their own PDF viewer.
+  document.querySelectorAll('[data-pdf-frame]').forEach(function (frame) {
+    const card = document.querySelector('[data-pdf-card]');
+    if (touchLayout.matches && card) {
+      frame.remove();
+      card.hidden = false;
+    } else {
+      frame.src = frame.getAttribute('data-src');
+    }
+  });
+
+  // Spreadsheets on phones: "Rows" turns each row into a card labelled by the header row, "Grid" keeps the
+  // real grid with zoom buttons. The choice is remembered on this device.
+  document.querySelectorAll('[data-sheet-mode]').forEach(function (mode) {
+    const viewer = mode.closest('[data-sheet-viewer]');
+    const zoomBox = mode.querySelector('[data-sheet-zoom]');
+    const zoomLabel = mode.querySelector('[data-zoom-label]');
+    const ZOOMS = [0.5, 0.65, 0.8, 1, 1.25];
+    let zoomIndex = 3;
+
+    viewer.querySelectorAll('.sheet-scroll').forEach(function (scroll) {
+      const table = scroll.querySelector('.sheet-table');
+      if (table) scroll.insertAdjacentElement('afterend', buildRowCards(table));
+    });
+
+    function setView(view) {
+      viewer.classList.toggle('sheet-view-rows', view === 'rows');
+      mode.querySelectorAll('[data-sheet-view]').forEach(function (button) {
+        button.setAttribute('aria-pressed', String(button.getAttribute('data-sheet-view') === view));
+      });
+      zoomBox.hidden = view !== 'grid';
+      try {
+        window.localStorage.setItem('sit-sheet-view', view);
+      } catch (_error) {
+        // Not remembering the choice is fine.
+      }
+    }
+
+    function setZoom(nextIndex) {
+      zoomIndex = Math.max(0, Math.min(ZOOMS.length - 1, nextIndex));
+      viewer.querySelectorAll('.sheet-table').forEach(function (table) {
+        table.style.zoom = ZOOMS[zoomIndex];
+      });
+      zoomLabel.textContent = Math.round(ZOOMS[zoomIndex] * 100) + '%';
+    }
+
+    mode.querySelectorAll('[data-sheet-view]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        setView(button.getAttribute('data-sheet-view'));
+      });
+    });
+    mode.querySelectorAll('[data-zoom-step]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        setZoom(zoomIndex + Number(button.getAttribute('data-zoom-step')));
+      });
+    });
+
+    let saved = '';
+    try {
+      saved = window.localStorage.getItem('sit-sheet-view') || '';
+    } catch (_error) {
+      saved = '';
+    }
+    setView(phoneLayout.matches ? (saved === 'grid' ? 'grid' : 'rows') : 'grid');
+  });
+
+  // Reads the rendered grid back into rows, expanding merged cells so every value sits under its column.
+  function buildRowCards(table) {
+    const matrix = [];
+    Array.from(table.tBodies[0] ? table.tBodies[0].rows : []).forEach(function (row, r) {
+      matrix[r] = matrix[r] || [];
+      let c = 0;
+      Array.from(row.cells).forEach(function (cell, cellIndex) {
+        if (cellIndex === 0) return; // row number
+        while (matrix[r][c] !== undefined) c += 1;
+        const text = cell.textContent.trim();
+        for (let dr = 0; dr < (cell.rowSpan || 1); dr += 1) {
+          for (let dc = 0; dc < (cell.colSpan || 1); dc += 1) {
+            matrix[r + dr] = matrix[r + dr] || [];
+            matrix[r + dr][c + dc] = dr === 0 && dc === 0 ? text : '';
+          }
+        }
+        c += cell.colSpan || 1;
+      });
+    });
+
+    const rowNumbers = Array.from(table.tBodies[0] ? table.tBodies[0].rows : []).map(function (row) {
+      return row.cells[0] ? row.cells[0].textContent.trim() : '';
+    });
+    const letters = Array.from(table.tHead ? table.tHead.rows[0].cells : []).slice(1).map(function (cell) {
+      return cell.textContent.trim();
+    });
+
+    const list = document.createElement('ol');
+    list.className = 'sheet-rows';
+    const headerIndex = matrix.findIndex(function (row) {
+      return row && row.filter(Boolean).length >= 2;
+    });
+    if (headerIndex === -1) {
+      return list;
+    }
+    const headers = matrix[headerIndex].map(function (value, index) {
+      return value || letters[index] || '';
+    });
+
+    matrix.forEach(function (row, r) {
+      if (r <= headerIndex || !row || !row.some(Boolean)) return;
+      const filled = row.map(function (value, index) { return { label: headers[index], value: value }; })
+        .filter(function (entry) { return entry.value; });
+      const item = document.createElement('li');
+      item.className = 'sheet-row-card';
+      const title = document.createElement('p');
+      title.className = 'sheet-row-title';
+      title.textContent = filled.slice(0, 2).map(function (entry) { return entry.value; }).join(' · ');
+      const number = document.createElement('span');
+      number.className = 'sheet-row-number';
+      number.textContent = 'Row ' + rowNumbers[r];
+      item.appendChild(number);
+      item.appendChild(title);
+      if (filled.length > 2) {
+        const details = document.createElement('dl');
+        filled.slice(2).forEach(function (entry) {
+          const term = document.createElement('dt');
+          term.textContent = entry.label;
+          const value = document.createElement('dd');
+          value.textContent = entry.value;
+          details.appendChild(term);
+          details.appendChild(value);
+        });
+        item.appendChild(details);
+      }
+      list.appendChild(item);
+    });
+    return list;
   }
 
   // Offers "add to home screen" on phones: Android gets an Install button, iOS gets the Share-menu steps.

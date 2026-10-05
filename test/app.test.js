@@ -318,14 +318,15 @@ test('phones can install the tracker from the manifest without signing in', asyn
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-type'), /application\/manifest\+json/);
   const manifest = await response.json();
-  assert.equal(manifest.start_url, 'files');
+  assert.equal(manifest.start_url, 'library');
   assert.equal(manifest.display, 'standalone');
   for (const icon of manifest.icons) {
     assert.equal((await fetch(`${baseUrl}/${icon.src}`)).status, 200, icon.src);
   }
 
-  const { text } = await admin.page('/files');
+  const { text } = await admin.page('/library');
   assert.match(text, /rel="manifest"/);
+  assert.match(text, /class="tab-bar"/);
 });
 
 test('a rejected issue keeps what was typed', async () => {
@@ -445,6 +446,13 @@ test('library files upload and open in the browser', async () => {
   assert.match(search.text, /Stage Plot/);
   assert.doesNotMatch(search.text, /Input List/);
 
+  // Phones browse departments as folders and act on a file from its menu.
+  assert.match(list.text, new RegExp(`href="library\\?department=${departmentId('Audio')}"[^>]*>[\\s\\S]*?Audio[\\s\\S]*?3 files`));
+  assert.match(list.text, /data-file-menu data-title="Stage Plot"/);
+  const folder = await admin.page(`/library?department=${departmentId('Audio')}`);
+  assert.match(folder.text, /Search in Audio/);
+  assert.doesNotMatch(folder.text, /class="drive-folders/);
+
   const word = await admin.page(`/library/${libraryIds.docx}`);
   assert.match(word.text, /class="doc-page"/);
   assert.match(word.text, /Downstage center/);
@@ -458,6 +466,12 @@ test('library files upload and open in the browser', async () => {
   assert.match(sheet.text, /<col data-width="84"><col data-width="360"><\/colgroup>/);
   assert.doesNotMatch(sheet.text, /hidden value/);
   assert.match(sheet.text, /<td colspan="2">Drums<\/td>/);
+  assert.match(sheet.text, /data-sheet-view="rows"/);
+
+  // The PDF frame only loads on desktop; phones get a card that opens their own PDF viewer.
+  const pdfPage = await admin.page(`/library/${libraryIds.pdf}`);
+  assert.match(pdfPage.text, /<iframe class="doc-frame" data-pdf-frame data-src="[^"]+Manual\.pdf"/);
+  assert.match(pdfPage.text, /data-pdf-card hidden/);
 
   const download = await admin.request(`/library/${libraryIds.docx}/file`);
   assert.match(download.headers.get('content-disposition'), /^attachment; filename="Stage Plot.docx"/);

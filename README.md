@@ -202,6 +202,18 @@ The **Library** page holds files your teams always need, such as stage plots, in
 
 Library files are stored in `storage/uploads/library`, so existing Docker Compose setups keep them without any changes, and they are included in full backups.
 
+## On Phones
+
+On a phone the tracker works like an app, while the desktop layout stays as it is:
+
+- A tab bar along the bottom switches between Dashboard, Library, Add Issue, Issue Files, and Settings
+- The Library opens like Google Drive: a search bar, a folder for each department, and a menu on every file for Open, Download, Share link, and Edit; the Upload button floats in the corner
+- Spreadsheets open as a list of cards, one per row, labelled by the header row; switch to Grid for the real sheet with zoom buttons
+- PDFs open in the phone's own PDF viewer, and images open full screen with swipe and pinch-zoom
+- The Dashboard shows search first and folds the other filters behind a Filters button
+
+To install it, open the Library on the phone and either tap **Install** (Android) or tap Share, then **Add to Home Screen** (iPhone and iPad). It then opens full screen on the Library, without the browser's address bar. Android only offers installing when the tracker is served over HTTPS. An installed iPhone app keeps its own sign-in, so sign in once inside it.
+
 ## Upgrading to 1.5
 
 - The Files page is now called **Issue Files**, and the new **Library** page sits next to it.

@@ -68,7 +68,7 @@ const BACKUP_FILENAME_PREFIX = 'simple-issue-tracker-backup-';
 const SCHEDULED_BACKUP_CHECK_MS = 60 * 60 * 1000;
 const SCHEDULED_BACKUP_RETENTION = 30;
 const PRE_RESTORE_BACKUP_RETENTION = 5;
-const ASSET_VERSION = '20261004-1';
+const ASSET_VERSION = '20261004-3';
 const THEME_COOKIE = 'sit_theme';
 const DEPARTMENT_SEPARATOR = '\u001f';
 // Settings that belong to this server rather than to the data, so they are never exported or restored.
@@ -1653,7 +1653,7 @@ app.get('/logo/:filename', (req, res) => {
   res.sendFile(path.join(LOGO_DIR, filename));
 });
 
-// Lets phones install the tracker to the home screen; it opens on the Files page like an app.
+// Lets phones install the tracker to the home screen; it opens on the Library like an app.
 // Relative URLs resolve against this file, so it also works when the tracker is served under a sub-path.
 app.get('/manifest.webmanifest', (_req, res) => {
   const displayTitle = getSetting('display_title', APP_NAME);
@@ -1667,10 +1667,10 @@ app.get('/manifest.webmanifest', (_req, res) => {
     icons.unshift({ src: `logo/${encodeURIComponent(logoFilename)}`, sizes: 'any', purpose: 'any' });
   }
   res.type('application/manifest+json').send(JSON.stringify({
-    id: 'files',
+    id: 'library',
     name: displayTitle,
-    short_name: displayTitle.length > 12 ? 'Files' : displayTitle,
-    start_url: 'files',
+    short_name: displayTitle.length > 12 ? 'Library' : displayTitle,
+    start_url: 'library',
     scope: './',
     display: 'standalone',
     background_color: '#080b10',
@@ -1929,9 +1929,26 @@ app.get('/library', (req, res) => {
     groups.get(file.department_id === null ? 'general' : file.department_id).files.push(file);
   }
 
+  // Phones browse departments as folders, so every department is listed with its full count.
+  const folderCounts = new Map(
+    db.prepare('SELECT department_id, COUNT(*) AS count FROM library_files GROUP BY department_id').all()
+      .map((row) => [row.department_id === null ? 'general' : String(row.department_id), row.count])
+  );
+  const folders = getDepartments().map((dept) => ({
+    key: String(dept.id),
+    name: dept.name,
+    count: folderCounts.get(String(dept.id)) || 0
+  }));
+  const currentFolder = department === 'general'
+    ? { key: 'general', name: 'General' }
+    : folders.find((folder) => folder.key === department) || null;
+
   res.render('library', {
     ...libraryFormOptions(),
     groups: [...groups.values()].filter((group) => group.files.length > 0),
+    folders,
+    currentFolder,
+    atRoot: department === 'all' && !q,
     fileCount: files.length,
     totalCount: db.prepare('SELECT COUNT(*) AS count FROM library_files').get().count,
     filters: { q, department }

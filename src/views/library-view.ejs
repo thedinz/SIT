@@ -1,7 +1,11 @@
 <%- include('partials/top', { title: file.title }) %>
 
 <% const fileUrl = urlFor(`/library/${file.id}/file/${encodeURIComponent(file.original_filename)}`); %>
-<section class="page-heading">
+<% const downloadUrl = urlFor(`/library/${file.id}/file?download=1`); %>
+<nav class="drive-crumbs phone-only" aria-label="Library location">
+  <a href="<%= urlFor(`/library?department=${file.department_id === null ? 'general' : file.department_id}`) %>">&lsaquo; <%= file.department_name || 'General' %></a>
+</nav>
+<section class="page-heading library-view-heading">
   <div>
     <p class="eyebrow"><%= file.department_name || 'General' %> &middot; <%= file.typeLabel %></p>
     <h1 class="library-title"><%= file.title %></h1>
@@ -11,20 +15,30 @@
     <% } %>
   </div>
   <div class="backup-row-actions">
-    <a class="primary-button compact" href="<%= urlFor(`/library/${file.id}/file?download=1`) %>">Download</a>
+    <a class="primary-button compact" href="<%= downloadUrl %>">Download</a>
     <% if (preview.kind === 'pdf' || preview.kind === 'image' || preview.kind === 'text') { %>
-      <a class="secondary-button compact" href="<%= fileUrl %>" target="_blank" rel="noopener">Open in New Tab</a>
+      <a class="secondary-button compact open-new-tab" href="<%= fileUrl %>" target="_blank" rel="noopener">Open in New Tab</a>
     <% } %>
     <a class="secondary-button compact" href="<%= urlFor(`/library/${file.id}/edit`) %>">Edit</a>
-    <a class="ghost-button compact" href="<%= urlFor('/library') %>">Back</a>
+    <button class="secondary-button compact" type="button" data-share-link data-title="<%= file.title %>" hidden>Share</button>
+    <a class="ghost-button compact library-back" href="<%= urlFor('/library') %>">Back</a>
   </div>
 </section>
 
 <% if (preview.kind === 'pdf') { %>
-  <iframe class="doc-frame" src="<%= fileUrl %>" title="<%= file.title %>"></iframe>
+  <%# Phones and tablets cannot scroll a PDF inside a frame, so they get a card that opens their own PDF viewer. %>
+  <iframe class="doc-frame" data-pdf-frame data-src="<%= fileUrl %>" title="<%= file.title %>"></iframe>
+  <noscript><iframe class="doc-frame" src="<%= fileUrl %>" title="<%= file.title %>"></iframe></noscript>
+  <section class="doc-open-card" data-pdf-card hidden>
+    <span class="file-badge file-badge-pdf" aria-hidden="true">PDF</span>
+    <h2><%= file.title %></h2>
+    <p class="muted"><%= formatBytes(file.size) %> &middot; Opens in your phone's PDF viewer</p>
+    <a class="primary-button" href="<%= fileUrl %>" target="_blank" rel="noopener">Open PDF</a>
+    <a class="secondary-button" href="<%= downloadUrl %>">Download</a>
+  </section>
 <% } else if (preview.kind === 'image') { %>
   <div class="doc-image-wrap">
-    <img class="doc-image" src="<%= fileUrl %>" alt="<%= file.title %>">
+    <img class="doc-image" src="<%= fileUrl %>" alt="<%= file.title %>" data-viewer-src="<%= fileUrl %>" data-viewer-name="<%= file.title %>">
   </div>
 <% } else if (preview.kind === 'word') { %>
   <p class="field-hint doc-note">Preview of the text, tables, and pictures. Download to open it in Word with its exact layout.</p>
@@ -32,6 +46,17 @@
 <% } else if (preview.kind === 'sheets') { %>
   <p class="field-hint doc-note">Preview of the values in each sheet<%= preview.sheets.some((sheet) => sheet.truncated) ? `, showing the first ${preview.maxRows} rows` : '' %>. Download to open it in Excel with formulas and formatting.</p>
   <div class="sheet-viewer" data-sheet-viewer>
+    <div class="sheet-mode phone-only" data-sheet-mode>
+      <div class="segmented" role="group" aria-label="Spreadsheet view">
+        <button type="button" data-sheet-view="rows" aria-pressed="true">Rows</button>
+        <button type="button" data-sheet-view="grid" aria-pressed="false">Grid</button>
+      </div>
+      <div class="sheet-zoom" data-sheet-zoom hidden>
+        <button type="button" data-zoom-step="-1" aria-label="Zoom out">&minus;</button>
+        <span data-zoom-label>100%</span>
+        <button type="button" data-zoom-step="1" aria-label="Zoom in">+</button>
+      </div>
+    </div>
     <% if (preview.sheets.length > 1) { %>
       <div class="sheet-tabs" role="tablist" aria-label="Sheets">
         <% preview.sheets.forEach((sheet, index) => { %>

@@ -2,7 +2,7 @@
 <html lang="en" data-theme="<%= theme || 'dark' %>">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title><%= typeof title !== 'undefined' && title ? `${title} | ${displayTitle}` : displayTitle %></title>
     <link rel="icon" href="<%= faviconUrl %>">
     <link rel="apple-touch-icon" href="<%= touchIconUrl %>">
@@ -39,6 +39,22 @@
           </form>
         </nav>
       </header>
+      <% const tabs = [
+        { href: '/', label: 'Dashboard', icon: 'home', active: currentPath === '/' },
+        { href: '/library', label: 'Library', icon: 'folder', active: currentPath === '/library' || currentPath.startsWith('/library/') },
+        { href: '/issues/new', label: 'Add Issue', icon: 'plus', active: currentPath === '/issues/new' },
+        { href: '/files', label: 'Issue Files', icon: 'clip', active: currentPath === '/files' },
+        { href: '/settings', label: 'Settings', icon: 'gear', active: currentPath === '/settings' }
+      ]; %>
+      <%# Phone-only bottom navigation, like an installed app; the header links are hidden on phones. %>
+      <nav class="tab-bar" aria-label="App navigation">
+        <% tabs.forEach((tab) => { %>
+          <a class="<%= tab.active ? 'active' : '' %>" href="<%= urlFor(tab.href) %>" <%- tab.active ? 'aria-current="page"' : '' %>>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><%- include('tab-icon', { name: tab.icon }) %></svg>
+            <span><%= tab.label %></span>
+          </a>
+        <% }) %>
+      </nav>
     <% } %>
     <main class="<%= isAuthenticated ? 'page-shell' : 'login-shell' %>">
       <%- include('flash') %>

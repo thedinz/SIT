@@ -9,14 +9,6 @@
   <a class="primary-button compact" href="<%= urlFor('/issues/new') %>">Add Issue</a>
 </section>
 
-<aside class="install-hint" data-install-hint hidden>
-  <p data-install-text>Add Files to your home screen to open it like an app.</p>
-  <div class="install-hint-actions">
-    <button class="primary-button compact" type="button" data-install-button hidden>Install</button>
-    <button class="secondary-button compact" type="button" data-install-dismiss>Not now</button>
-  </div>
-</aside>
-
 <% if (fileCount === 0) { %>
   <section class="empty-state">
     <h2>No files yet</h2>

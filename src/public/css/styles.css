@@ -692,11 +692,6 @@ select:focus,
   font-weight: 750;
 }
 
-/* Thumbnails only appear in the phone layout; hidden lazy images are never downloaded. */
-.file-thumb {
-  display: none;
-}
-
 .install-hint[hidden],
 .image-viewer[hidden],
 .viewer-nav[hidden] {
@@ -832,37 +827,11 @@ body.viewer-open {
     font-size: 0.78rem;
   }
 
-  .file-thumb {
-    display: block;
-    width: 56px;
-    height: 56px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface-strong);
-    object-fit: cover;
-  }
-
-  .file-thumb-pdf {
-    display: grid;
-    place-items: center;
-    color: var(--danger);
-    font-size: 0.78rem;
-    font-weight: 800;
-  }
-
-  /* The whole row opens the file; the issue button sits above that tap area. */
+  /* The whole row opens the file; the row's menu button sits above that tap area. */
   .file-link::after {
     position: absolute;
     inset: 0;
     content: "";
-  }
-
-  .file-row .secondary-button {
-    position: relative;
-    min-height: 40px;
-    padding: 6px 10px;
-    font-size: 0.82rem;
-    white-space: nowrap;
   }
 
   .files-list .file-row:first-child {
@@ -873,10 +842,6 @@ body.viewer-open {
     margin-top: -8px;
   }
 
-  .settings-card.files-card {
-    gap: 12px;
-    padding: 16px 14px 6px;
-  }
 }
 
 @media (max-width: 560px) {
@@ -1959,7 +1924,7 @@ body.viewer-open {
     left: 0;
     z-index: 40;
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     padding: 4px 4px env(safe-area-inset-bottom);
     border-top: 1px solid var(--border);
     background: color-mix(in srgb, var(--surface) 94%, transparent);

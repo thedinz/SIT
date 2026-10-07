@@ -505,7 +505,8 @@
 
     function openViewer(link) {
       if (!viewer) buildViewer();
-      const list = link.closest('.files-list');
+      // Swipe between the other images of the same issue (or the same Library list).
+      const list = link.closest('.files-list, .attachment-strip');
       group = list ? Array.from(list.querySelectorAll('[data-viewer-image]')) : [link];
       show(group.indexOf(link));
       viewer.hidden = false;

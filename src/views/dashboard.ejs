@@ -81,7 +81,7 @@
           <% if (attachments.length > 0) { %>
             <div class="attachment-strip" aria-label="Attachments">
               <% attachments.forEach((attachment) => { %>
-                <a class="attachment-chip" href="<%= urlFor(`/uploads/${attachment.filename}`) %>" target="_blank" rel="noopener noreferrer">
+                <a class="attachment-chip" href="<%= urlFor(`/uploads/${attachment.filename}`) %>" target="_blank" rel="noopener noreferrer" <%- attachment.mime_type.startsWith('image/') ? 'data-viewer-image' : '' %>>
                   <% if (attachment.mime_type.startsWith('image/')) { %>
                     <img src="<%= urlFor(`/uploads/${attachment.filename}`) %>" alt="">
                   <% } %>

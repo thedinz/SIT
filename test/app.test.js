@@ -299,18 +299,23 @@ test('changing the password signs out other devices', async () => {
 });
 
 test('signing in returns to the page that asked for it', async () => {
-  const blocked = await otherDevice.request('/files');
+  const blocked = await otherDevice.request('/library');
   assert.match(blocked.headers.get('location'), /login/);
 
   const signedIn = await otherDevice.login(NEW_PASSWORD);
-  assert.match(signedIn.headers.get('location'), /files$/);
+  assert.match(signedIn.headers.get('location'), /library$/);
 
   // Background file requests while signed out must not hijack where login lands.
-  await otherDevice.post('/logout', {}, '/files');
-  await otherDevice.request('/files');
+  await otherDevice.post('/logout', {}, '/library');
+  await otherDevice.request('/library');
   await otherDevice.request('/uploads/missing.png');
   const again = await otherDevice.login(NEW_PASSWORD);
-  assert.match(again.headers.get('location'), /files$/);
+  assert.match(again.headers.get('location'), /library$/);
+
+  // The old Issue Files page now points to the Library.
+  const oldFiles = await otherDevice.request('/files');
+  assert.equal(oldFiles.status, 301);
+  assert.match(oldFiles.headers.get('location'), /library$/);
 });
 
 test('phones can install the tracker from the manifest without signing in', async () => {
@@ -385,6 +390,8 @@ test('issues save with attachments, and search ignores markup', async () => {
   assert.equal((await dashboard(admin, '?q=%25')).total, 0);
   assert.equal((await dashboard(admin, '?q=broke')).total, 1);
   assert.match(all.text, /<time datetime="[^"]+" data-local-time>/);
+  // Image attachments open in the full-screen viewer on phones.
+  assert.match(all.text, /class="attachment-chip"[^>]*data-viewer-image>/);
 });
 
 test('saving over someone else\'s newer edit is caught', async () => {

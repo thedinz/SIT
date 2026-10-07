@@ -11,7 +11,6 @@ A simple self-hosted issue-and-resolution log for church production teams. It is
 - WYSIWYG issue and resolution editors with bold, italic, lists, and links
 - Screenshot/file attachments for images and PDFs; paste a screenshot straight into the editor to attach it
 - Edit conflict detection, and issues can be deleted from the edit page
-- Issue Files page with issue attachments grouped by department
 - Library for standing team documents (stage plots, input lists, manuals) that are not tied to an issue, with in-browser viewing of Word, Excel, PDF, image, and text files
 - Settings for title, logo, departments, theme, and shared password
 - Full zip backup export/import from Settings
@@ -187,7 +186,7 @@ RUN_AS_ROOT=false
 
 ## Library
 
-The **Library** page holds files your teams always need, such as stage plots, input lists, checklists, and manuals. Unlike Issue Files, they are not attached to an issue and stay until someone removes them.
+The **Library** page holds files your teams always need, such as stage plots, input lists, checklists, and manuals. Unlike issue attachments, they are not tied to an issue and stay until someone removes them.
 
 - Upload several files at once and file them under a department, or under General for everyone
 - Search by name or description and filter by department
@@ -206,7 +205,7 @@ Library files are stored in `storage/uploads/library`, so existing Docker Compos
 
 On a phone the tracker works like an app, while the desktop layout stays as it is:
 
-- A tab bar along the bottom switches between Dashboard, Library, Add Issue, Issue Files, and Settings
+- A tab bar along the bottom switches between Dashboard, Library, Add Issue, and Settings
 - The Library opens like Google Drive: a search bar, a folder for each department, and a menu on every file for Open, Download, Share link, and Edit; the Upload button floats in the corner
 - Spreadsheets open as a list of cards, one per row, labelled by the header row; switch to Grid for the real sheet with zoom buttons
 - PDFs open in the phone's own PDF viewer, and images open full screen with swipe and pinch-zoom
@@ -216,7 +215,7 @@ To install it, open the Library on the phone and either tap **Install** (Android
 
 ## Upgrading to 1.5
 
-- The Files page is now called **Issue Files**, and the new **Library** page sits next to it.
+- The Files page has been removed. Issue attachments are opened from their issue on the Dashboard, and files every team needs belong in the new **Library** page. Old links to the Files page go to the Library.
 - No Docker Compose changes are needed.
 
 ## Default Departments

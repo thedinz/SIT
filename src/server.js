@@ -68,7 +68,7 @@ const BACKUP_FILENAME_PREFIX = 'simple-issue-tracker-backup-';
 const SCHEDULED_BACKUP_CHECK_MS = 60 * 60 * 1000;
 const SCHEDULED_BACKUP_RETENTION = 30;
 const PRE_RESTORE_BACKUP_RETENTION = 5;
-const ASSET_VERSION = '20261004-3';
+const ASSET_VERSION = '20261006-1';
 const THEME_COOKIE = 'sit_theme';
 const DEPARTMENT_SEPARATOR = '\u001f';
 // Settings that belong to this server rather than to the data, so they are never exported or restored.
@@ -1800,30 +1800,9 @@ app.get('/', (req, res) => {
   });
 });
 
-app.get('/files', (_req, res) => {
-  const groups = new Map(getDepartments().map((department) => [
-    department.id, { ...department, files: [] }
-  ]));
-  const files = db.prepare(`
-    SELECT a.*, idp.department_id
-    FROM attachments a
-    JOIN issues i ON i.id = a.issue_id
-    LEFT JOIN issue_departments idp ON idp.issue_id = i.id
-    ORDER BY a.uploaded_at DESC, a.id DESC
-  `).all();
-
-  for (const file of files) {
-    if (!groups.has(file.department_id)) {
-      groups.set(file.department_id, { id: 'unassigned', name: 'No department', files: [] });
-    }
-    groups.get(file.department_id).files.push(file);
-  }
-
-  res.render('files', {
-    departments: [...groups.values()],
-    fileCount: new Set(files.map((file) => file.id)).size,
-    formatBytes
-  });
+// The Issue Files page was removed: attachments are viewed on their issue, and shared files live in the Library.
+app.get('/files', (req, res) => {
+  res.redirect(301, urlFor(req, '/library'));
 });
 
 function getLibraryFile(id) {

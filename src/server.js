@@ -3,6 +3,7 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { pipeline } = require('stream/promises');
 const express = require('express');
 const helmet = require('helmet');
 const compression = require('compression');
@@ -11,21 +12,34 @@ const cookieSession = require('cookie-session');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const Database = require('better-sqlite3');
-const AdmZip = require('adm-zip');
+const yazl = require('yazl');
+const yauzl = require('yauzl');
+const contentDisposition = require('content-disposition');
 
 const {
   db,
-  DB_PATH,
-  DATA_DIR,
   UPLOAD_DIR,
+  LIBRARY_DIR,
   LOGO_DIR,
   BACKUP_DIR,
   TMP_DIR,
+  DEFAULT_PASSWORD,
   getSetting,
   setSetting,
-  nowIso
+  nowIso,
+  issueSearchText,
+  refreshDefaultPasswordFlag
 } = require('./db');
 const { sanitizeEditorHtml, textFromHtml } = require('./sanitize');
+const {
+  INLINE_VIEWERS,
+  libraryTypeFor,
+  libraryAcceptList,
+  libraryExtensionsLabel,
+  cleanDisplayFilename,
+  titleFromFilename,
+  buildPreview
+} = require('./library');
 const packageInfo = require('../package.json');
 
 const app = express();
@@ -35,13 +49,41 @@ const APP_VERSION = process.env.APP_VERSION || process.env.SIT_VERSION || packag
 const APP_BRANCH = process.env.APP_BRANCH || process.env.SIT_BRANCH || 'local';
 const APP_COMMIT = process.env.APP_COMMIT || process.env.SIT_COMMIT || '';
 const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
+const MAX_ATTACHMENT_FILES = 12;
+const MAX_FIELD_SIZE = 2 * 1024 * 1024;
+const MAX_LIBRARY_FILE_SIZE = 50 * 1024 * 1024;
+const MAX_LIBRARY_FILES = 20;
+const LIBRARY_DIRNAME = path.basename(LIBRARY_DIR);
 const MAX_LOGO_SIZE = 3 * 1024 * 1024;
-const MAX_BACKUP_SIZE = 1024 * 1024 * 1024;
+const MAX_BACKUP_SIZE = 5 * 1024 * 1024 * 1024;
+const MAX_RESTORE_UNCOMPRESSED_SIZE = 20 * 1024 * 1024 * 1024;
+const MAX_RESTORE_ENTRIES = 200000;
+const MAX_MANIFEST_SIZE = 1024 * 1024;
+const MIN_PASSWORD_LENGTH = 8;
+const LOGIN_MAX_FAILURES = 10;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const VALID_STATUSES = new Set(['pending', 'resolved']);
 const VALID_BACKUP_FREQUENCIES = new Set(['daily', 'weekly', 'monthly']);
 const BACKUP_FILENAME_PREFIX = 'simple-issue-tracker-backup-';
 const SCHEDULED_BACKUP_CHECK_MS = 60 * 60 * 1000;
 const SCHEDULED_BACKUP_RETENTION = 30;
+const PRE_RESTORE_BACKUP_RETENTION = 5;
+const ASSET_VERSION = '20261006-1';
+const THEME_COOKIE = 'sit_theme';
+const DEPARTMENT_SEPARATOR = '\u001f';
+// Settings that belong to this server rather than to the data, so they are never exported or restored.
+const INSTANCE_SETTING_KEYS = new Set(['session_secret', 'session_version']);
+// Multipart routes verify the CSRF token themselves once multer has parsed the body.
+const MULTIPART_ROUTES = [
+  /^\/issues$/,
+  /^\/issues\/\d+$/,
+  /^\/library$/,
+  /^\/library\/\d+$/,
+  /^\/settings\/logo$/,
+  /^\/settings\/import$/
+];
+// While the default password is in use, only these routes are reachable.
+const DEFAULT_PASSWORD_ALLOWED_PATHS = new Set(['/settings', '/settings/password', '/settings/import', '/logout']);
 const allowedAttachmentTypes = new Map([
   ['image/jpeg', ['.jpg', '.jpeg']],
   ['image/png', ['.png']],
@@ -56,10 +98,31 @@ const allowedLogoTypes = new Map([
   ['image/webp', ['.webp']]
 ]);
 
+function parseTrustProxy(value) {
+  if (!value) {
+    return undefined;
+  }
+  if (value === 'true') {
+    return true;
+  }
+  if (value === 'false') {
+    return false;
+  }
+  if (/^\d+$/.test(value)) {
+    return Number(value);
+  }
+  return value.split(',').map((entry) => entry.trim()).filter(Boolean);
+}
+
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.disable('x-powered-by');
 app.set('etag', false);
+
+const trustProxy = parseTrustProxy(process.env.TRUST_PROXY);
+if (trustProxy !== undefined) {
+  app.set('trust proxy', trustProxy);
+}
 
 app.use(
   helmet({
@@ -69,7 +132,7 @@ app.use(
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
         styleSrc: ["'self'"],
-        imgSrc: ["'self'", 'data:'],
+        imgSrc: ["'self'", 'data:', 'blob:'],
         fontSrc: ["'self'", 'data:'],
         connectSrc: ["'self'"],
         objectSrc: ["'none'"],
@@ -105,6 +168,59 @@ app.use((req, res, next) => {
 
 function normalizeFilename(filename) {
   return path.basename(filename || '').replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function readCookie(req, name) {
+  for (const part of String(req.headers.cookie || '').split(';')) {
+    const separator = part.indexOf('=');
+    if (separator > 0 && part.slice(0, separator).trim() === name) {
+      try {
+        return decodeURIComponent(part.slice(separator + 1).trim());
+      } catch (_error) {
+        return '';
+      }
+    }
+  }
+  return '';
+}
+
+function isAllowedLogoFilename(filename) {
+  const extension = path.extname(filename || '').toLowerCase();
+  return [...allowedLogoTypes.values()].some((extensions) => extensions.includes(extension));
+}
+
+function configuredLogoFilename() {
+  const filename = normalizeFilename(getSetting('logo_filename'));
+  return filename && isAllowedLogoFilename(filename) ? filename : '';
+}
+
+function mimeTypeForAttachmentFilename(filename) {
+  const extension = path.extname(filename || '').toLowerCase();
+  for (const [mimeType, extensions] of allowedAttachmentTypes) {
+    if (extensions.includes(extension)) {
+      return mimeType;
+    }
+  }
+  return '';
+}
+
+function defaultSiteIconSvg() {
+  return `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect width="64" height="64" rx="14" fill="#101827"/>
+      <path d="M16 20h32v6H16zM16 30h24v6H16zM16 40h30v6H16z" fill="#7dd3fc"/>
+      <circle cx="47" cy="23" r="5" fill="#a7f3d0"/>
+    </svg>
+  `.trim();
 }
 
 function extensionForUpload(file, allowedTypes) {
@@ -143,13 +259,32 @@ function fileFilterFor(allowedTypes) {
 const attachmentUpload = multer({
   storage: createStorage(UPLOAD_DIR, allowedAttachmentTypes),
   fileFilter: fileFilterFor(allowedAttachmentTypes),
-  limits: { fileSize: MAX_ATTACHMENT_SIZE, files: 12 }
+  limits: { fileSize: MAX_ATTACHMENT_SIZE, files: MAX_ATTACHMENT_FILES, fieldSize: MAX_FIELD_SIZE }
 });
 
 const logoUpload = multer({
   storage: createStorage(LOGO_DIR, allowedLogoTypes),
   fileFilter: fileFilterFor(allowedLogoTypes),
   limits: { fileSize: MAX_LOGO_SIZE, files: 1 }
+});
+
+const libraryUpload = multer({
+  storage: multer.diskStorage({
+    destination: LIBRARY_DIR,
+    filename(_req, file, cb) {
+      cb(null, `${Date.now()}-${crypto.randomUUID()}${path.extname(file.originalname).toLowerCase()}`);
+    }
+  }),
+  fileFilter: (_req, file, cb) => {
+    if (!libraryTypeFor(file.originalname)) {
+      cb(new Error(`${cleanDisplayFilename(file.originalname)} is not an allowed file type. Allowed: ${libraryExtensionsLabel()}.`));
+      return;
+    }
+    cb(null, true);
+  },
+  // Browsers send file names as UTF-8, so names with accents stay readable.
+  defParamCharset: 'utf8',
+  limits: { fileSize: MAX_LIBRARY_FILE_SIZE, files: MAX_LIBRARY_FILES, fieldSize: MAX_FIELD_SIZE }
 });
 
 const backupUpload = multer({
@@ -211,12 +346,75 @@ function consumeFlash(req) {
   return flash || null;
 }
 
-function requireAuth(req, res, next) {
+function isAuthenticated(req) {
+  return Boolean(req.session.authenticated) && req.session.sessionVersion === getSetting('session_version');
+}
+
+function signIn(req) {
+  req.session.authenticated = true;
+  req.session.sessionVersion = getSetting('session_version');
+  req.session.csrfToken = crypto.randomBytes(24).toString('hex');
+}
+
+function signOutOtherSessions(req) {
+  const nextVersion = String(Number(getSetting('session_version', '1')) + 1);
+  setSetting('session_version', nextVersion);
   if (req.session.authenticated) {
+    req.session.sessionVersion = nextVersion;
+  }
+}
+
+function isSafeReturnPath(value) {
+  return typeof value === 'string' && /^\/(?![/\\])/.test(value);
+}
+
+function requireAuth(req, res, next) {
+  if (isAuthenticated(req)) {
     next();
     return;
   }
+  if (req.session.authenticated) {
+    delete req.session.authenticated;
+    delete req.session.sessionVersion;
+  }
+  // Remember the page so a home-screen launch straight to Files lands back there after signing in.
+  if (req.method === 'GET' && isSafeReturnPath(req.url) && !/^\/(uploads|settings\/backups)\//.test(req.path)) {
+    req.session.returnTo = req.url;
+  }
   redirectTo(req, res, '/login');
+}
+
+function csrfToken(req) {
+  if (!req.session.csrfToken) {
+    req.session.csrfToken = crypto.randomBytes(24).toString('hex');
+  }
+  return req.session.csrfToken;
+}
+
+function hasValidCsrfToken(req) {
+  const expected = String(req.session.csrfToken || '');
+  const provided = String((req.body && req.body._csrf) || '');
+  if (!expected || provided.length !== expected.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+}
+
+function rejectCsrf(req, res) {
+  removeUploadedFiles(req.files);
+  if (req.file && req.file.path) {
+    fs.rm(req.file.path, { force: true }, () => {});
+  }
+  setFlash(req, 'error', 'That form was out of date. Please try again.');
+  res.redirect(303, req.get('referer') || urlFor(req, '/'));
+}
+
+function requireCsrf(req, res, next) {
+  if (hasValidCsrfToken(req)) {
+    next();
+    return;
+  }
+  rejectCsrf(req, res);
 }
 
 function formatDate(value) {
@@ -230,6 +428,18 @@ function formatDate(value) {
     hour: 'numeric',
     minute: '2-digit'
   }).format(new Date(value));
+}
+
+// Server-formatted fallback that the browser rewrites into the viewer's own timezone.
+function localTime(value) {
+  if (!value) {
+    return '';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+  return `<time datetime="${date.toISOString()}" data-local-time>${escapeHtml(formatDate(date))}</time>`;
 }
 
 function pageSizeFrom(value) {
@@ -248,6 +458,10 @@ function normalizeStatus(value) {
 
 function normalizeBackupFrequency(value) {
   return VALID_BACKUP_FREQUENCIES.has(value) ? value : 'weekly';
+}
+
+function likePattern(value) {
+  return `%${value.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
 }
 
 function nextBackupTime(lastRunAt, frequency) {
@@ -427,6 +641,17 @@ function removeUploadedFiles(files) {
   }
 }
 
+function removeAttachmentFile(filename) {
+  const safeFilename = normalizeFilename(filename);
+  if (!safeFilename) {
+    return;
+  }
+  const filePath = path.join(UPLOAD_DIR, safeFilename);
+  if (isPathInside(UPLOAD_DIR, filePath)) {
+    fs.rm(filePath, { force: true }, () => {});
+  }
+}
+
 function deleteAttachmentFiles(issueId, ids) {
   const attachmentIds = Array.isArray(ids) ? ids : ids ? [ids] : [];
   if (attachmentIds.length === 0) {
@@ -460,10 +685,7 @@ function deleteAttachmentFiles(issueId, ids) {
   removeRows(rows);
 
   for (const attachment of rows) {
-    const filePath = path.join(UPLOAD_DIR, attachment.filename);
-    if (filePath.startsWith(UPLOAD_DIR)) {
-      fs.rm(filePath, { force: true }, () => {});
-    }
+    removeAttachmentFile(attachment.filename);
   }
 }
 
@@ -480,6 +702,13 @@ function readFileBase64IfExists(directory, filename) {
   return fs.readFileSync(filePath).toString('base64');
 }
 
+function exportableSettings() {
+  return db
+    .prepare('SELECT key, value FROM settings ORDER BY key')
+    .all()
+    .filter((setting) => !INSTANCE_SETTING_KEYS.has(setting.key));
+}
+
 function createBackupData(options = {}) {
   const includeFileData = options.includeFileData !== false;
   const attachments = db.prepare('SELECT * FROM attachments ORDER BY id').all().map((attachment) => (
@@ -489,6 +718,12 @@ function createBackupData(options = {}) {
           data_base64: readFileBase64IfExists(UPLOAD_DIR, attachment.filename)
         }
       : { ...attachment }
+  ));
+
+  const libraryFiles = db.prepare('SELECT * FROM library_files ORDER BY id').all().map((file) => (
+    includeFileData
+      ? { ...file, data_base64: readFileBase64IfExists(LIBRARY_DIR, file.filename) }
+      : { ...file }
   ));
 
   const logoFilename = getSetting('logo_filename');
@@ -506,7 +741,7 @@ function createBackupData(options = {}) {
       name: APP_NAME,
       version: APP_VERSION
     },
-    settings: db.prepare('SELECT key, value FROM settings ORDER BY key').all(),
+    settings: exportableSettings(),
     departments: db.prepare('SELECT id, name, created_at, updated_at FROM departments ORDER BY id').all(),
     issues: db.prepare(`
       SELECT id, department_id, poster_name, status, issue_html, resolution_html, created_at, updated_at
@@ -519,6 +754,7 @@ function createBackupData(options = {}) {
       ORDER BY issue_id, department_id
     `).all(),
     attachments,
+    library_files: libraryFiles,
     logos
   };
 }
@@ -534,18 +770,23 @@ function writeBackupFilesTo(directory, files) {
   }
 }
 
-function clearDirectory(directory) {
-  fs.mkdirSync(directory, { recursive: true });
-  for (const entry of fs.readdirSync(directory)) {
-    fs.rmSync(path.join(directory, entry), { recursive: true, force: true });
+// Copies the source entries over the destination and returns the names the destination should keep.
+function stageDirectoryContents(sourceDirectory, destinationDirectory, skipEntries = new Set()) {
+  fs.mkdirSync(sourceDirectory, { recursive: true });
+  fs.mkdirSync(destinationDirectory, { recursive: true });
+  const entries = fs.readdirSync(sourceDirectory).filter((entry) => !skipEntries.has(entry));
+  for (const entry of entries) {
+    fs.cpSync(path.join(sourceDirectory, entry), path.join(destinationDirectory, entry), { recursive: true, force: true });
   }
+  return new Set(entries);
 }
 
-function copyDirectoryContents(sourceDirectory, destinationDirectory) {
-  clearDirectory(destinationDirectory);
-  fs.mkdirSync(sourceDirectory, { recursive: true });
-  for (const entry of fs.readdirSync(sourceDirectory)) {
-    fs.cpSync(path.join(sourceDirectory, entry), path.join(destinationDirectory, entry), { recursive: true });
+function removeDirectoryEntries(directory, shouldRemove) {
+  fs.mkdirSync(directory, { recursive: true });
+  for (const entry of fs.readdirSync(directory)) {
+    if (shouldRemove(entry)) {
+      fs.rmSync(path.join(directory, entry), { recursive: true, force: true });
+    }
   }
 }
 
@@ -565,7 +806,7 @@ function backupArchiveFilename(label = 'manual') {
 
 function normalizeBackupArchiveName(filename) {
   const safeFilename = normalizeFilename(filename);
-  if (!safeFilename.endsWith('.zip')) {
+  if (!safeFilename.startsWith(BACKUP_FILENAME_PREFIX) || !safeFilename.endsWith('.zip')) {
     return '';
   }
   return safeFilename;
@@ -581,16 +822,43 @@ function backupArchivePath(filename) {
   return isPathInside(BACKUP_DIR, filePath) ? filePath : '';
 }
 
-function addDirectoryToZip(zip, sourceDirectory, archiveDirectory) {
+function backupKind(filename) {
+  if (filename.endsWith('-scheduled.zip')) {
+    return 'Scheduled';
+  }
+  if (filename.endsWith('-pre-restore.zip')) {
+    return 'Before restore';
+  }
+  return 'Manual';
+}
+
+function addDirectoryToZip(zip, sourceDirectory, archiveDirectory, skipEntries = new Set()) {
   fs.mkdirSync(sourceDirectory, { recursive: true });
   for (const entry of fs.readdirSync(sourceDirectory, { withFileTypes: true })) {
+    if (skipEntries.has(entry.name)) {
+      continue;
+    }
     const sourcePath = path.join(sourceDirectory, entry.name);
     const archivePath = `${archiveDirectory}/${entry.name}`;
     if (entry.isDirectory()) {
       addDirectoryToZip(zip, sourcePath, archivePath);
     } else if (entry.isFile()) {
-      zip.addLocalFile(sourcePath, path.posix.dirname(archivePath), path.posix.basename(archivePath));
+      // Images, PDFs, and Office files are already compressed, so store them as-is.
+      zip.addFile(sourcePath, archivePath, { compress: false });
     }
+  }
+}
+
+// The snapshot is a byte copy of the live database, so strip this server's secrets from it too.
+function scrubInstanceSettings(databasePath) {
+  const snapshot = new Database(databasePath);
+  try {
+    snapshot.pragma('journal_mode = DELETE');
+    const keys = [...INSTANCE_SETTING_KEYS];
+    snapshot.prepare(`DELETE FROM settings WHERE key IN (${keys.map(() => '?').join(',')})`).run(...keys);
+    snapshot.exec('VACUUM');
+  } finally {
+    snapshot.close();
   }
 }
 
@@ -599,9 +867,11 @@ async function createFullBackupArchive(destinationPath) {
   const dbSnapshotPath = path.join(tmpRoot, 'simple_issue_tracker.sqlite');
   const manifestPath = path.join(tmpRoot, 'manifest.json');
   const recordsPath = path.join(tmpRoot, 'records.json');
+  const partialPath = `${destinationPath}.partial`;
 
   try {
     await db.backup(dbSnapshotPath);
+    scrubInstanceSettings(dbSnapshotPath);
     const manifest = {
       backup_type: 'simple-issue-tracker-full',
       backup_version: 3,
@@ -612,20 +882,25 @@ async function createFullBackupArchive(destinationPath) {
         branch: APP_BRANCH,
         commit: APP_COMMIT
       },
-      includes: ['database', 'settings', 'departments', 'issues', 'attachments', 'uploads', 'logo']
+      includes: ['database', 'settings', 'departments', 'issues', 'attachments', 'uploads', 'library', 'logo']
     };
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
     fs.writeFileSync(recordsPath, JSON.stringify(createBackupData({ includeFileData: false }), null, 2));
 
-    const zip = new AdmZip();
-    zip.addLocalFile(manifestPath, '', 'manifest.json');
-    zip.addLocalFile(recordsPath, 'metadata', 'records.json');
-    zip.addLocalFile(dbSnapshotPath, 'database', 'simple_issue_tracker.sqlite');
-    addDirectoryToZip(zip, UPLOAD_DIR, 'uploads');
+    const zip = new yazl.ZipFile();
+    zip.addFile(manifestPath, 'manifest.json');
+    zip.addFile(recordsPath, 'metadata/records.json');
+    zip.addFile(dbSnapshotPath, 'database/simple_issue_tracker.sqlite');
+    addDirectoryToZip(zip, UPLOAD_DIR, 'uploads', new Set([LIBRARY_DIRNAME]));
+    addDirectoryToZip(zip, LIBRARY_DIR, 'library');
     addDirectoryToZip(zip, LOGO_DIR, 'logo');
+    zip.end();
+
     fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
-    zip.writeZip(destinationPath);
+    await pipeline(zip.outputStream, fs.createWriteStream(partialPath));
+    fs.renameSync(partialPath, destinationPath);
   } finally {
+    fs.rmSync(partialPath, { force: true });
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 }
@@ -640,20 +915,20 @@ function listBackupArchives() {
       const stats = fs.statSync(filePath);
       return {
         filename,
+        kind: backupKind(filename),
         size: stats.size,
         formattedSize: formatBytes(stats.size),
-        createdAt: stats.mtime.toISOString(),
-        createdAtLabel: formatDate(stats.mtime)
+        createdAt: stats.mtime.toISOString()
       };
     })
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-function pruneScheduledBackups() {
-  const scheduledBackups = listBackupArchives()
-    .filter((backup) => backup.filename.endsWith('-scheduled.zip'));
+function pruneBackups(suffix, retention) {
+  const matchingBackups = listBackupArchives()
+    .filter((backup) => backup.filename.endsWith(suffix));
 
-  for (const backup of scheduledBackups.slice(SCHEDULED_BACKUP_RETENTION)) {
+  for (const backup of matchingBackups.slice(retention)) {
     const filePath = backupArchivePath(backup.filename);
     if (filePath) {
       fs.rmSync(filePath, { force: true });
@@ -691,19 +966,17 @@ function safeZipEntryName(entryName) {
   return normalized;
 }
 
-function writeZipEntry(entry, destinationDirectory, relativeName) {
+function safeZipTargetPath(destinationDirectory, relativeName) {
   const safeName = safeZipEntryName(relativeName);
   if (!safeName) {
-    return;
+    return '';
   }
 
   const filePath = path.join(destinationDirectory, ...safeName.split('/'));
   if (!isPathInside(destinationDirectory, filePath)) {
     throw new Error('The backup archive contains an unsafe file path.');
   }
-
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, entry.getData());
+  return filePath;
 }
 
 function tableExists(database, tableName) {
@@ -733,6 +1006,13 @@ function readBackupDatabaseData(databasePath) {
     const issueDepartments = tableExists(backupDb, 'issue_departments')
       ? backupDb.prepare('SELECT issue_id, department_id FROM issue_departments ORDER BY issue_id, department_id').all()
       : [];
+    const libraryFiles = tableExists(backupDb, 'library_files')
+      ? backupDb.prepare(`
+          SELECT id, department_id, title, description, filename, original_filename, mime_type, size, created_at, updated_at
+          FROM library_files
+          ORDER BY id
+        `).all()
+      : [];
 
     return {
       backup_version: 3,
@@ -748,6 +1028,7 @@ function readBackupDatabaseData(databasePath) {
       `).all(),
       issue_departments: issueDepartments,
       attachments,
+      library_files: libraryFiles,
       logos: []
     };
   } finally {
@@ -755,35 +1036,110 @@ function readBackupDatabaseData(databasePath) {
   }
 }
 
-function extractBackupArchive(archivePath, destinationRoot) {
-  const zip = new AdmZip(archivePath);
+function openZipFile(archivePath) {
+  return new Promise((resolve, reject) => {
+    yauzl.open(archivePath, { lazyEntries: true, validateEntrySizes: true }, (error, zipFile) => {
+      if (error) {
+        reject(new Error('That file is not a readable zip archive.'));
+        return;
+      }
+      resolve(zipFile);
+    });
+  });
+}
+
+function openZipEntryStream(zipFile, entry) {
+  return new Promise((resolve, reject) => {
+    zipFile.openReadStream(entry, (error, stream) => (error ? reject(error) : resolve(stream)));
+  });
+}
+
+async function readZipEntryText(zipFile, entry, maxSize) {
+  if (entry.uncompressedSize > maxSize) {
+    throw new Error('The backup manifest is too large.');
+  }
+  const chunks = [];
+  for await (const chunk of await openZipEntryStream(zipFile, entry)) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+// Streams entries to disk one at a time so large backups never have to fit in memory.
+async function extractBackupArchive(archivePath, destinationRoot) {
   const tmpUploadDir = path.join(destinationRoot, 'uploads');
+  const tmpLibraryDir = path.join(destinationRoot, 'library');
   const tmpLogoDir = path.join(destinationRoot, 'logo');
   const tmpDatabasePath = path.join(destinationRoot, 'simple_issue_tracker.sqlite');
   let manifest = null;
+  let totalSize = 0;
 
   fs.mkdirSync(tmpUploadDir, { recursive: true });
+  fs.mkdirSync(tmpLibraryDir, { recursive: true });
   fs.mkdirSync(tmpLogoDir, { recursive: true });
 
-  for (const entry of zip.getEntries()) {
-    if (entry.isDirectory) {
-      continue;
+  const zipFile = await openZipFile(archivePath);
+  try {
+    if (zipFile.entryCount > MAX_RESTORE_ENTRIES) {
+      throw new Error('The backup archive contains too many files.');
     }
 
-    const entryName = safeZipEntryName(entry.entryName);
-    if (!entryName) {
-      throw new Error('The backup archive contains an unsafe file path.');
-    }
+    const handleEntry = async (entry) => {
+      if (entry.fileName.endsWith('/')) {
+        return;
+      }
 
-    if (entryName === 'manifest.json') {
-      manifest = JSON.parse(entry.getData().toString('utf8'));
-    } else if (entryName === 'database/simple_issue_tracker.sqlite') {
-      fs.writeFileSync(tmpDatabasePath, entry.getData());
-    } else if (entryName.startsWith('uploads/')) {
-      writeZipEntry(entry, tmpUploadDir, entryName.replace(/^uploads\//, ''));
-    } else if (entryName.startsWith('logo/')) {
-      writeZipEntry(entry, tmpLogoDir, entryName.replace(/^logo\//, ''));
-    }
+      const entryName = safeZipEntryName(entry.fileName);
+      if (!entryName) {
+        throw new Error('The backup archive contains an unsafe file path.');
+      }
+
+      totalSize += entry.uncompressedSize;
+      if (totalSize > MAX_RESTORE_UNCOMPRESSED_SIZE) {
+        throw new Error('The backup archive is too large to restore.');
+      }
+
+      if (entryName === 'manifest.json') {
+        try {
+          manifest = JSON.parse(await readZipEntryText(zipFile, entry, MAX_MANIFEST_SIZE));
+        } catch (_error) {
+          throw new Error('The backup manifest could not be read.');
+        }
+        return;
+      }
+
+      let targetPath = '';
+      if (entryName === 'database/simple_issue_tracker.sqlite') {
+        targetPath = tmpDatabasePath;
+      } else if (entryName.startsWith(`uploads/${LIBRARY_DIRNAME}/`)) {
+        // Library files only come from the archive's own library folder.
+        return;
+      } else if (entryName.startsWith('uploads/')) {
+        targetPath = safeZipTargetPath(tmpUploadDir, entryName.replace(/^uploads\//, ''));
+      } else if (entryName.startsWith('library/')) {
+        targetPath = safeZipTargetPath(tmpLibraryDir, entryName.replace(/^library\//, ''));
+      } else if (entryName.startsWith('logo/')) {
+        targetPath = safeZipTargetPath(tmpLogoDir, entryName.replace(/^logo\//, ''));
+      }
+
+      if (!targetPath) {
+        return;
+      }
+
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      await pipeline(await openZipEntryStream(zipFile, entry), fs.createWriteStream(targetPath));
+    };
+
+    await new Promise((resolve, reject) => {
+      zipFile.on('entry', (entry) => {
+        handleEntry(entry).then(() => zipFile.readEntry(), reject);
+      });
+      zipFile.on('end', resolve);
+      zipFile.on('error', reject);
+      zipFile.readEntry();
+    });
+  } finally {
+    zipFile.close();
   }
 
   if (!fs.existsSync(tmpDatabasePath)) {
@@ -797,18 +1153,20 @@ function extractBackupArchive(archivePath, destinationRoot) {
   return {
     databasePath: tmpDatabasePath,
     uploadDir: tmpUploadDir,
+    libraryDir: tmpLibraryDir,
     logoDir: tmpLogoDir,
     manifest
   };
 }
 
-function restoreBackupArchive(archivePath) {
+async function restoreBackupArchive(archivePath) {
   const tmpRoot = fs.mkdtempSync(path.join(TMP_DIR, 'restore-'));
   try {
-    const extracted = extractBackupArchive(archivePath, tmpRoot);
+    const extracted = await extractBackupArchive(archivePath, tmpRoot);
     const backup = readBackupDatabaseData(extracted.databasePath);
-    restoreBackupData(backup, {
+    return restoreBackupData(backup, {
       uploadDir: extracted.uploadDir,
+      libraryDir: extracted.libraryDir,
       logoDir: extracted.logoDir
     });
   } finally {
@@ -833,7 +1191,7 @@ async function runScheduledBackupIfDue() {
   try {
     const backup = await createStoredBackup('scheduled');
     setSetting('backup_last_run_at', nowIso());
-    pruneScheduledBackups();
+    pruneBackups('-scheduled.zip', SCHEDULED_BACKUP_RETENTION);
     console.info(`Scheduled backup created: ${backup.filename}`);
   } catch (error) {
     console.error('Scheduled backup failed:', error);
@@ -851,6 +1209,14 @@ function startScheduledBackups() {
   }, SCHEDULED_BACKUP_CHECK_MS);
 }
 
+function restoredAttachmentMimeType(attachment, filename) {
+  const mimeType = String(attachment.mime_type || '');
+  if (allowedAttachmentTypes.has(mimeType)) {
+    return mimeType;
+  }
+  return mimeTypeForAttachmentFilename(filename) || 'application/octet-stream';
+}
+
 function restoreBackupData(backup, fileSource = {}) {
   if (!backup || !Array.isArray(backup.departments) || !Array.isArray(backup.issues)) {
     throw new Error('That backup file does not look like a Simple Issue Tracker backup.');
@@ -858,20 +1224,41 @@ function restoreBackupData(backup, fileSource = {}) {
 
   const tmpRoot = fs.mkdtempSync(path.join(TMP_DIR, 'import-'));
   const tmpUploadDir = fileSource.uploadDir || path.join(tmpRoot, 'uploads');
+  const tmpLibraryDir = fileSource.libraryDir || path.join(tmpRoot, 'library');
   const tmpLogoDir = fileSource.logoDir || path.join(tmpRoot, 'logo');
+  const previousUploads = new Set(fs.existsSync(UPLOAD_DIR) ? fs.readdirSync(UPLOAD_DIR) : []);
+  const previousLibrary = new Set(fs.existsSync(LIBRARY_DIR) ? fs.readdirSync(LIBRARY_DIR) : []);
+  const previousLogos = new Set(fs.existsSync(LOGO_DIR) ? fs.readdirSync(LOGO_DIR) : []);
+  const previousPasswordHash = getSetting('password_hash');
+  const libraryFolder = new Set([LIBRARY_DIRNAME]);
+  let restoredUploads = new Set();
+  let restoredLibrary = new Set();
+  let restoredLogos = new Set();
 
   try {
     if (!fileSource.uploadDir) {
       writeBackupFilesTo(tmpUploadDir, backup.attachments || []);
     }
+    if (!fileSource.libraryDir) {
+      writeBackupFilesTo(tmpLibraryDir, (backup.library_files || []).filter((file) => libraryTypeFor(file.filename)));
+    }
     if (!fileSource.logoDir) {
       writeBackupFilesTo(tmpLogoDir, backup.logos || []);
     }
-    fs.mkdirSync(tmpUploadDir, { recursive: true });
-    fs.mkdirSync(tmpLogoDir, { recursive: true });
+
+    // Copy files in before touching the database; old files are only removed once the database commits.
+    restoredUploads = stageDirectoryContents(tmpUploadDir, UPLOAD_DIR, libraryFolder);
+    restoredLibrary = stageDirectoryContents(tmpLibraryDir, LIBRARY_DIR);
+    restoredLogos = stageDirectoryContents(tmpLogoDir, LOGO_DIR);
 
     const restore = db.transaction(() => {
+      const instanceKeys = [...INSTANCE_SETTING_KEYS];
+      const instanceSettings = db
+        .prepare(`SELECT key, value FROM settings WHERE key IN (${instanceKeys.map(() => '?').join(',')})`)
+        .all(...instanceKeys);
+
       db.prepare('DELETE FROM attachments').run();
+      db.prepare('DELETE FROM library_files').run();
       db.prepare('DELETE FROM issue_departments').run();
       db.prepare('DELETE FROM issues').run();
       db.prepare('DELETE FROM departments').run();
@@ -879,16 +1266,16 @@ function restoreBackupData(backup, fileSource = {}) {
 
       const insertSetting = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
       for (const setting of backup.settings || []) {
-        if (setting && setting.key) {
+        if (setting && setting.key && !INSTANCE_SETTING_KEYS.has(String(setting.key))) {
           insertSetting.run(String(setting.key), String(setting.value || ''));
         }
       }
+      for (const setting of instanceSettings) {
+        insertSetting.run(setting.key, setting.value);
+      }
 
       if (!getSetting('password_hash')) {
-        setSetting('password_hash', bcrypt.hashSync('admin', 12));
-      }
-      if (!getSetting('session_secret')) {
-        setSetting('session_secret', crypto.randomBytes(32).toString('hex'));
+        setSetting('password_hash', bcrypt.hashSync(DEFAULT_PASSWORD, 12));
       }
       if (!getSetting('theme')) {
         setSetting('theme', 'dark');
@@ -898,6 +1285,9 @@ function restoreBackupData(backup, fileSource = {}) {
       }
       if (!getSetting('backup_frequency')) {
         setSetting('backup_frequency', 'weekly');
+      }
+      if (getSetting('logo_filename') && !configuredLogoFilename()) {
+        db.prepare("DELETE FROM settings WHERE key = 'logo_filename'").run();
       }
 
       const insertDepartment = db.prepare(`
@@ -921,20 +1311,23 @@ function restoreBackupData(backup, fileSource = {}) {
       }
 
       const insertIssue = db.prepare(`
-        INSERT INTO issues (id, department_id, poster_name, status, issue_html, resolution_html, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO issues (id, department_id, poster_name, status, issue_html, resolution_html, search_text, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const issue of backup.issues) {
         const issueDepartmentId = restoredDepartmentIds.includes(Number(issue.department_id))
           ? Number(issue.department_id)
           : restoredDepartmentIds[0];
+        const issueHtml = sanitizeEditorHtml(String(issue.issue_html || ''));
+        const resolutionHtml = sanitizeEditorHtml(String(issue.resolution_html || ''));
         insertIssue.run(
           Number(issue.id),
           issueDepartmentId,
           String(issue.poster_name || '').slice(0, 120),
           normalizeStatus(issue.status),
-          String(issue.issue_html || ''),
-          String(issue.resolution_html || ''),
+          issueHtml,
+          resolutionHtml,
+          issueSearchText(issueHtml, resolutionHtml),
           issue.created_at || nowIso(),
           issue.updated_at || issue.created_at || nowIso()
         );
@@ -968,102 +1361,290 @@ function restoreBackupData(backup, fileSource = {}) {
           Number(attachment.issue_id),
           filename,
           normalizeFilename(attachment.original_filename || filename),
-          String(attachment.mime_type || 'application/octet-stream'),
+          restoredAttachmentMimeType(attachment, filename),
           Number(attachment.size || 0),
           attachment.uploaded_at || nowIso()
+        );
+      }
+
+      const insertLibraryFile = db.prepare(`
+        INSERT INTO library_files (id, department_id, title, description, filename, original_filename, mime_type, size, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const file of backup.library_files || []) {
+        const filename = normalizeFilename(file.filename);
+        const type = libraryTypeFor(filename);
+        if (!filename || !type) {
+          continue;
+        }
+        const originalFilename = cleanDisplayFilename(file.original_filename || filename);
+        insertLibraryFile.run(
+          Number(file.id),
+          restoredDepartmentIds.includes(Number(file.department_id)) ? Number(file.department_id) : null,
+          String(file.title || titleFromFilename(originalFilename)).trim().slice(0, 160),
+          String(file.description || '').trim().slice(0, 500),
+          filename,
+          originalFilename,
+          type.mimeType,
+          Number(file.size || 0),
+          file.created_at || nowIso(),
+          file.updated_at || file.created_at || nowIso()
         );
       }
     });
 
     restore();
-    copyDirectoryContents(tmpUploadDir, UPLOAD_DIR);
-    copyDirectoryContents(tmpLogoDir, LOGO_DIR);
+  } catch (error) {
+    // Remove staged files that were not there before, so a failed restore leaves everything as it was.
+    removeDirectoryEntries(UPLOAD_DIR, (entry) => restoredUploads.has(entry) && !previousUploads.has(entry));
+    removeDirectoryEntries(LIBRARY_DIR, (entry) => restoredLibrary.has(entry) && !previousLibrary.has(entry));
+    removeDirectoryEntries(LOGO_DIR, (entry) => restoredLogos.has(entry) && !previousLogos.has(entry));
+    throw error;
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
+
+  removeDirectoryEntries(UPLOAD_DIR, (entry) => entry !== LIBRARY_DIRNAME && !restoredUploads.has(entry));
+  removeDirectoryEntries(LIBRARY_DIR, (entry) => !restoredLibrary.has(entry));
+  removeDirectoryEntries(LOGO_DIR, (entry) => !restoredLogos.has(entry));
+  refreshDefaultPasswordFlag();
+  return { passwordChanged: getSetting('password_hash') !== previousPasswordHash };
 }
 
-function uploadMiddleware(middleware, failureRedirect = 'back') {
+function uploadErrorMessage(error, maxSizeLabel, maxFiles = MAX_ATTACHMENT_FILES) {
+  if (error instanceof multer.MulterError) {
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return `Each file must be ${maxSizeLabel} or smaller.`;
+    }
+    if (error.code === 'LIMIT_FILE_COUNT' || error.code === 'LIMIT_UNEXPECTED_FILE') {
+      return `Too many files were selected. Attach up to ${maxFiles} at a time.`;
+    }
+    if (error.code === 'LIMIT_FIELD_VALUE') {
+      return 'The text is too long to save. If you pasted an image into the text, attach it as a file instead.';
+    }
+    return 'The upload could not be processed.';
+  }
+  return error.message || 'The upload could not be processed.';
+}
+
+// Runs a multer middleware, handing any upload error to onError instead of the generic error page.
+function uploadMiddleware(middleware, maxSizeLabel, onError, maxFiles) {
   return (req, res, next) => {
     middleware(req, res, (error) => {
       if (!error) {
         next();
         return;
       }
-
-      const message =
-        error instanceof multer.MulterError
-          ? 'The uploaded file is too large or too many files were selected.'
-          : error.message || 'The upload could not be processed.';
-      setFlash(req, 'error', message);
-      res.redirect(failureRedirect === 'back' ? req.get('referer') || urlFor(req, '/') : urlFor(req, failureRedirect));
+      onError(req, res, uploadErrorMessage(error, maxSizeLabel, maxFiles));
     });
+  };
+}
+
+function redirectOnUploadError(target) {
+  return (req, res, message) => {
+    setFlash(req, 'error', message);
+    redirectTo(req, res, target);
   };
 }
 
 function renderIssueForm(res, options) {
   res.render('issue-form', {
     appName: APP_NAME,
-    formatDate,
     ...options
   });
 }
 
+function issueFromBody(req, base = {}) {
+  const body = req.body || {};
+  return {
+    ...base,
+    poster_name: String(body.poster_name || '').trim().slice(0, 120),
+    status: normalizeStatus(body.status),
+    department_ids: validDepartmentIds(selectedIdsFrom(body.department_ids)),
+    issue_html: sanitizeEditorHtml(body.issue_html),
+    resolution_html: sanitizeEditorHtml(body.resolution_html)
+  };
+}
+
+// Shows the form again with what the person typed, so a mistake never throws away their write-up.
+function rerenderIssueForm(req, res, { issue, message, status = 422 }) {
+  const hadFiles = Boolean(req.files && req.files.length > 0);
+  removeUploadedFiles(req.files);
+  const isEdit = Boolean(issue.id);
+  res.status(status);
+  res.locals.flash = {
+    type: 'error',
+    message: hadFiles ? `${message} Your text was kept, but choose your files again before saving.` : message,
+    sticky: true
+  };
+  renderIssueForm(res, {
+    title: isEdit ? 'Edit Issue' : 'Add Issue',
+    mode: isEdit ? 'edit' : 'create',
+    action: isEdit ? `/issues/${issue.id}` : '/issues',
+    issue,
+    attachments: isEdit ? getAttachments(issue.id) : [],
+    departments: getDepartments()
+  });
+}
+
+function issueUploadError(req, res, message) {
+  if (!req.params.id) {
+    rerenderIssueForm(req, res, { issue: issueFromBody(req), message });
+    return;
+  }
+
+  const existing = getIssue(Number(req.params.id));
+  if (!existing) {
+    setFlash(req, 'error', 'That issue could not be found.');
+    redirectTo(req, res, '/');
+    return;
+  }
+  rerenderIssueForm(req, res, {
+    issue: issueFromBody(req, {
+      id: existing.id,
+      created_at: existing.created_at,
+      updated_at: String((req.body && req.body.base_updated_at) || existing.updated_at)
+    }),
+    message
+  });
+}
+
+function issueValidationError(issue) {
+  if (!issue.poster_name) {
+    return 'Add your name before saving.';
+  }
+  if (issue.department_ids.length === 0) {
+    return 'Choose at least one department before saving.';
+  }
+  if (!textFromHtml(issue.issue_html)) {
+    return 'Add the issue details before saving.';
+  }
+  return '';
+}
+
+const loginFailures = new Map();
+
+function loginIsBlocked(ip) {
+  const entry = loginFailures.get(ip);
+  if (!entry) {
+    return false;
+  }
+  if (Date.now() - entry.firstFailureAt > LOGIN_WINDOW_MS) {
+    loginFailures.delete(ip);
+    return false;
+  }
+  return entry.count >= LOGIN_MAX_FAILURES;
+}
+
+function recordLoginFailure(ip) {
+  const entry = loginFailures.get(ip);
+  if (!entry || Date.now() - entry.firstFailureAt > LOGIN_WINDOW_MS) {
+    loginFailures.set(ip, { count: 1, firstFailureAt: Date.now() });
+    return;
+  }
+  entry.count += 1;
+}
+
+setInterval(() => {
+  for (const [ip, entry] of loginFailures) {
+    if (Date.now() - entry.firstFailureAt > LOGIN_WINDOW_MS) {
+      loginFailures.delete(ip);
+    }
+  }
+}, LOGIN_WINDOW_MS).unref();
+
 app.use((req, res, next) => {
   res.locals.appName = APP_NAME;
   res.locals.displayTitle = getSetting('display_title', APP_NAME);
-  res.locals.assetVersion = '20260701-2';
+  res.locals.assetVersion = ASSET_VERSION;
   res.locals.appVersion = APP_VERSION;
   res.locals.appBranch = APP_BRANCH;
   res.locals.appCommit = APP_COMMIT ? APP_COMMIT.slice(0, 7) : '';
   res.locals.urlFor = (target) => urlFor(req, target);
-  res.locals.isAuthenticated = Boolean(req.session.authenticated);
+  res.locals.csrfToken = () => csrfToken(req);
+  res.locals.isAuthenticated = isAuthenticated(req);
+  res.locals.passwordIsDefault = getSetting('password_is_default') === '1';
   res.locals.currentPath = req.path;
   res.locals.flash = consumeFlash(req);
   res.locals.formatDate = formatDate;
-  res.locals.theme = req.session.theme || getSetting('theme', 'dark');
-  const logoFilename = getSetting('logo_filename');
+  res.locals.localTime = localTime;
+  const cookieTheme = readCookie(req, THEME_COOKIE);
+  res.locals.theme = cookieTheme === 'light' || cookieTheme === 'dark' ? cookieTheme : getSetting('theme', 'dark');
+  const logoFilename = configuredLogoFilename();
   res.locals.logoUrl = logoFilename ? urlFor(req, `/logo/${encodeURIComponent(logoFilename)}`) : '';
+  res.locals.faviconUrl = urlFor(req, `/site-icon?v=${encodeURIComponent(logoFilename || ASSET_VERSION)}`);
+  // iOS ignores SVG home-screen icons, so use the PNG unless a logo has been uploaded.
+  res.locals.touchIconUrl = logoFilename ? res.locals.faviconUrl : urlFor(req, '/icons/apple-touch-icon.png');
   next();
 });
 
+// Every urlencoded POST must carry the form token; multipart posts are only accepted on upload routes.
+app.use((req, res, next) => {
+  if (req.method !== 'POST') {
+    next();
+    return;
+  }
+  if (req.is('multipart/form-data')) {
+    if (MULTIPART_ROUTES.some((pattern) => pattern.test(req.path))) {
+      next();
+      return;
+    }
+    rejectCsrf(req, res);
+    return;
+  }
+  requireCsrf(req, res, next);
+});
+
 app.get('/healthz', (_req, res) => {
-  res.status(200).json({ ok: true, database: path.basename(DB_PATH) });
+  db.prepare('SELECT 1').get();
+  res.status(200).json({ ok: true });
 });
 
 app.get('/login', (req, res) => {
-  if (req.session.authenticated) {
+  if (isAuthenticated(req)) {
     redirectTo(req, res, '/');
     return;
   }
   res.render('login', { appName: APP_NAME });
 });
 
-app.post('/login', (req, res) => {
-  const password = String(req.body.password || '');
-  const passwordHash = getSetting('password_hash');
+app.post('/login', async (req, res, next) => {
+  try {
+    if (loginIsBlocked(req.ip)) {
+      console.info(`Shared login blocked for ${req.ip} after repeated failures`);
+      setFlash(req, 'error', 'Too many incorrect passwords. Wait 15 minutes and try again.');
+      redirectTo(req, res, '/login');
+      return;
+    }
 
-  if (bcrypt.compareSync(password, passwordHash)) {
-    console.info(`Shared login succeeded from ${req.ip}`);
-    req.session.authenticated = true;
-    req.session.theme = getSetting('theme', 'dark');
-    setFlash(req, 'success', 'You are logged in.');
-    redirectTo(req, res, '/');
-    return;
+    const password = String(req.body.password || '');
+    if (await bcrypt.compare(password, getSetting('password_hash'))) {
+      console.info(`Shared login succeeded from ${req.ip}`);
+      loginFailures.delete(req.ip);
+      const returnTo = isSafeReturnPath(req.session.returnTo) ? req.session.returnTo : '/';
+      delete req.session.returnTo;
+      signIn(req);
+      setFlash(req, 'success', 'You are logged in.');
+      redirectTo(req, res, returnTo);
+      return;
+    }
+
+    console.info(`Shared login failed from ${req.ip}`);
+    recordLoginFailure(req.ip);
+    setFlash(req, 'error', 'The password was not correct.');
+    redirectTo(req, res, '/login');
+  } catch (error) {
+    next(error);
   }
-
-  console.info(`Shared login failed from ${req.ip}`);
-  setFlash(req, 'error', 'The password was not correct.');
-  redirectTo(req, res, '/login');
 });
 
-app.get('/logout', (req, res) => {
+app.post('/logout', (req, res) => {
   req.session = null;
   redirectTo(req, res, '/login');
 });
 
 app.get('/logo/:filename', (req, res) => {
-  const configuredLogo = getSetting('logo_filename');
+  const configuredLogo = configuredLogoFilename();
   const filename = normalizeFilename(req.params.filename);
   if (!configuredLogo || configuredLogo !== filename) {
     res.status(404).send('Not found');
@@ -1072,7 +1653,55 @@ app.get('/logo/:filename', (req, res) => {
   res.sendFile(path.join(LOGO_DIR, filename));
 });
 
+// Lets phones install the tracker to the home screen; it opens on the Library like an app.
+// Relative URLs resolve against this file, so it also works when the tracker is served under a sub-path.
+app.get('/manifest.webmanifest', (_req, res) => {
+  const displayTitle = getSetting('display_title', APP_NAME);
+  const logoFilename = configuredLogoFilename();
+  const icons = [
+    { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+    { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+    { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
+  ];
+  if (logoFilename) {
+    icons.unshift({ src: `logo/${encodeURIComponent(logoFilename)}`, sizes: 'any', purpose: 'any' });
+  }
+  res.type('application/manifest+json').send(JSON.stringify({
+    id: 'library',
+    name: displayTitle,
+    short_name: displayTitle.length > 12 ? 'Library' : displayTitle,
+    start_url: 'library',
+    scope: './',
+    display: 'standalone',
+    background_color: '#080b10',
+    theme_color: '#111823',
+    icons
+  }));
+});
+
+app.get(['/site-icon', '/favicon.ico'], (_req, res) => {
+  const filename = configuredLogoFilename();
+  if (filename) {
+    const logoPath = path.join(LOGO_DIR, filename);
+    if (isPathInside(LOGO_DIR, logoPath) && fs.existsSync(logoPath)) {
+      res.sendFile(logoPath);
+      return;
+    }
+  }
+
+  res.type('image/svg+xml').send(defaultSiteIconSvg());
+});
+
 app.use(requireAuth);
+
+app.use((req, res, next) => {
+  if (getSetting('password_is_default') !== '1' || DEFAULT_PASSWORD_ALLOWED_PATHS.has(req.path)) {
+    next();
+    return;
+  }
+  setFlash(req, 'error', 'Change the default password before using the tracker.');
+  redirectTo(req, res, '/settings');
+});
 
 app.get('/', (req, res) => {
   const q = String(req.query.q || '').trim();
@@ -1085,18 +1714,18 @@ app.get('/', (req, res) => {
   const params = [];
 
   if (q) {
+    const pattern = likePattern(q);
     where.push(`(
-      i.issue_html LIKE ?
-      OR i.resolution_html LIKE ?
-      OR i.poster_name LIKE ?
+      i.search_text LIKE ? ESCAPE '\\'
+      OR i.poster_name LIKE ? ESCAPE '\\'
       OR EXISTS (
         SELECT 1
         FROM issue_departments sidp
         JOIN departments sd ON sd.id = sidp.department_id
-        WHERE sidp.issue_id = i.id AND sd.name LIKE ?
+        WHERE sidp.issue_id = i.id AND sd.name LIKE ? ESCAPE '\\'
       )
     )`);
-    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+    params.push(pattern, pattern, pattern);
   }
 
   if (department && department !== 'all') {
@@ -1124,7 +1753,7 @@ app.get('/', (req, res) => {
     .prepare(`
       SELECT
         i.*,
-        GROUP_CONCAT(d.name, ', ') AS department_names
+        GROUP_CONCAT(d.name, char(31)) AS department_names
       FROM issues i
       LEFT JOIN issue_departments idp ON idp.issue_id = i.id
       LEFT JOIN departments d ON d.id = idp.department_id
@@ -1133,7 +1762,11 @@ app.get('/', (req, res) => {
       ORDER BY ${orderSql}
       LIMIT ? OFFSET ?
     `)
-    .all(...params, pageSize, offset);
+    .all(...params, pageSize, offset)
+    .map((issue) => ({
+      ...issue,
+      department_list: String(issue.department_names || '').split(DEPARTMENT_SEPARATOR).filter(Boolean)
+    }));
   const attachmentsByIssue = getAttachmentsForIssues(issues.map((issue) => issue.id));
 
   const pageUrl = (targetPage) => {
@@ -1167,6 +1800,310 @@ app.get('/', (req, res) => {
   });
 });
 
+// The Issue Files page was removed: attachments are viewed on their issue, and shared files live in the Library.
+app.get('/files', (req, res) => {
+  res.redirect(301, urlFor(req, '/library'));
+});
+
+function getLibraryFile(id) {
+  const file = db
+    .prepare(`
+      SELECT lf.*, d.name AS department_name
+      FROM library_files lf
+      LEFT JOIN departments d ON d.id = lf.department_id
+      WHERE lf.id = ?
+    `)
+    .get(id);
+  return file ? decorateLibraryFile(file) : null;
+}
+
+const LIBRARY_BADGE_FAMILIES = {
+  Word: 'doc',
+  Document: 'doc',
+  Excel: 'sheet',
+  Spreadsheet: 'sheet',
+  CSV: 'sheet',
+  PowerPoint: 'slides',
+  Presentation: 'slides',
+  PDF: 'pdf',
+  Image: 'image',
+  Text: 'text'
+};
+
+function decorateLibraryFile(file) {
+  const type = libraryTypeFor(file.filename);
+  return {
+    ...file,
+    typeLabel: type ? type.label : 'File',
+    viewer: type ? type.viewer : '',
+    extension: path.extname(file.filename).slice(1).toUpperCase(),
+    badgeFamily: (type && LIBRARY_BADGE_FAMILIES[type.label]) || 'text'
+  };
+}
+
+function libraryFilePath(filename) {
+  const safeFilename = normalizeFilename(filename);
+  const filePath = path.join(LIBRARY_DIR, safeFilename);
+  return safeFilename && isPathInside(LIBRARY_DIR, filePath) ? filePath : '';
+}
+
+function removeLibraryFile(filename) {
+  const filePath = libraryFilePath(filename);
+  if (filePath) {
+    fs.rm(filePath, { force: true }, () => {});
+  }
+}
+
+// Library files without a department are shown under "General".
+function libraryDepartmentId(value) {
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 && validDepartmentIds([id]).length > 0 ? id : null;
+}
+
+function libraryFormOptions() {
+  return {
+    departments: getDepartments(),
+    acceptList: libraryAcceptList(),
+    extensionsLabel: libraryExtensionsLabel(),
+    maxFiles: MAX_LIBRARY_FILES,
+    maxFileSize: MAX_LIBRARY_FILE_SIZE,
+    formatBytes
+  };
+}
+
+app.get('/library', (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const department = String(req.query.department || 'all');
+  const where = [];
+  const params = [];
+
+  if (q) {
+    const pattern = likePattern(q);
+    where.push("(lf.title LIKE ? ESCAPE '\\' OR lf.description LIKE ? ESCAPE '\\' OR lf.original_filename LIKE ? ESCAPE '\\')");
+    params.push(pattern, pattern, pattern);
+  }
+  if (department === 'general') {
+    where.push('lf.department_id IS NULL');
+  } else if (department !== 'all') {
+    where.push('lf.department_id = ?');
+    params.push(Number(department) || 0);
+  }
+
+  const files = db
+    .prepare(`
+      SELECT lf.*, d.name AS department_name
+      FROM library_files lf
+      LEFT JOIN departments d ON d.id = lf.department_id
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY lower(lf.title), lf.id
+    `)
+    .all(...params)
+    .map(decorateLibraryFile);
+
+  const groups = new Map([['general', { key: 'general', name: 'General', files: [] }]]);
+  for (const dept of getDepartments()) {
+    groups.set(dept.id, { key: String(dept.id), name: dept.name, files: [] });
+  }
+  for (const file of files) {
+    groups.get(file.department_id === null ? 'general' : file.department_id).files.push(file);
+  }
+
+  // Phones browse departments as folders, so every department is listed with its full count.
+  const folderCounts = new Map(
+    db.prepare('SELECT department_id, COUNT(*) AS count FROM library_files GROUP BY department_id').all()
+      .map((row) => [row.department_id === null ? 'general' : String(row.department_id), row.count])
+  );
+  const folders = getDepartments().map((dept) => ({
+    key: String(dept.id),
+    name: dept.name,
+    count: folderCounts.get(String(dept.id)) || 0
+  }));
+  const currentFolder = department === 'general'
+    ? { key: 'general', name: 'General' }
+    : folders.find((folder) => folder.key === department) || null;
+
+  res.render('library', {
+    ...libraryFormOptions(),
+    groups: [...groups.values()].filter((group) => group.files.length > 0),
+    folders,
+    currentFolder,
+    atRoot: department === 'all' && !q,
+    fileCount: files.length,
+    totalCount: db.prepare('SELECT COUNT(*) AS count FROM library_files').get().count,
+    filters: { q, department }
+  });
+});
+
+app.post(
+  '/library',
+  uploadMiddleware(
+    libraryUpload.array('files', MAX_LIBRARY_FILES),
+    formatBytes(MAX_LIBRARY_FILE_SIZE),
+    redirectOnUploadError('/library'),
+    MAX_LIBRARY_FILES
+  ),
+  requireCsrf,
+  (req, res) => {
+    const files = req.files || [];
+    if (files.length === 0) {
+      setFlash(req, 'error', 'Choose at least one file to upload.');
+      redirectTo(req, res, '/library');
+      return;
+    }
+
+    const departmentId = libraryDepartmentId(req.body.department_id);
+    const description = String(req.body.description || '').trim().slice(0, 500);
+    // One title per file, in the order the files were chosen; a blank title falls back to a tidied file name.
+    const titles = [].concat(req.body.titles || []).map((title) => String(title).trim().slice(0, 160));
+    const insert = db.prepare(`
+      INSERT INTO library_files (department_id, title, description, filename, original_filename, mime_type, size, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const timestamp = nowIso();
+    db.transaction(() => {
+      files.forEach((file, index) => {
+        const originalFilename = cleanDisplayFilename(file.originalname);
+        insert.run(
+          departmentId,
+          titles[index] || titleFromFilename(originalFilename),
+          description,
+          normalizeFilename(file.filename),
+          originalFilename,
+          libraryTypeFor(file.filename).mimeType,
+          file.size,
+          timestamp,
+          timestamp
+        );
+      });
+    })();
+
+    setFlash(req, 'success', files.length === 1 ? 'File added to the Library.' : `${files.length} files added to the Library.`);
+    redirectTo(req, res, '/library');
+  }
+);
+
+app.get('/library/:id(\\d+)', async (req, res, next) => {
+  try {
+    const file = getLibraryFile(Number(req.params.id));
+    if (!file) {
+      setFlash(req, 'error', 'That library file could not be found.');
+      redirectTo(req, res, '/library');
+      return;
+    }
+    res.render('library-view', {
+      file,
+      preview: await buildPreview(libraryFilePath(file.filename), file),
+      formatBytes
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// The trailing name is ignored; it only gives the browser's PDF viewer and "Save as" a readable file name.
+app.get('/library/:id(\\d+)/file/:name?', (req, res) => {
+  const file = getLibraryFile(Number(req.params.id));
+  const filePath = file ? libraryFilePath(file.filename) : '';
+  if (!filePath || !fs.existsSync(filePath)) {
+    res.status(404).send('Not found');
+    return;
+  }
+
+  // Only PDFs, images, and plain text are shown by the browser; Office files always download.
+  const type = libraryTypeFor(file.filename);
+  const inline = Boolean(type) && INLINE_VIEWERS.has(type.viewer) && req.query.download !== '1';
+  res.set('Content-Disposition', contentDisposition(file.original_filename, { type: inline ? 'inline' : 'attachment' }));
+  if (!type) {
+    res.type('application/octet-stream');
+  } else if (type.viewer === 'text') {
+    res.type('text/plain; charset=utf-8');
+  } else {
+    res.type(type.mimeType);
+  }
+  res.sendFile(filePath);
+});
+
+app.get('/library/:id(\\d+)/edit', (req, res) => {
+  const file = getLibraryFile(Number(req.params.id));
+  if (!file) {
+    setFlash(req, 'error', 'That library file could not be found.');
+    redirectTo(req, res, '/library');
+    return;
+  }
+  res.render('library-edit', { ...libraryFormOptions(), file });
+});
+
+app.post(
+  '/library/:id(\\d+)',
+  uploadMiddleware(
+    libraryUpload.single('file'),
+    formatBytes(MAX_LIBRARY_FILE_SIZE),
+    (req, res, message) => {
+      setFlash(req, 'error', message);
+      redirectTo(req, res, `/library/${req.params.id}/edit`);
+    },
+    1
+  ),
+  requireCsrf,
+  (req, res) => {
+    const id = Number(req.params.id);
+    const existing = getLibraryFile(id);
+    if (!existing) {
+      removeUploadedFiles(req.file ? [req.file] : []);
+      setFlash(req, 'error', 'That library file could not be found.');
+      redirectTo(req, res, '/library');
+      return;
+    }
+
+    const title = String(req.body.title || '').trim().slice(0, 160) || existing.title;
+    const description = String(req.body.description || '').trim().slice(0, 500);
+    const departmentId = libraryDepartmentId(req.body.department_id);
+    const timestamp = nowIso();
+
+    if (req.file) {
+      db.prepare(`
+        UPDATE library_files
+        SET title = ?, description = ?, department_id = ?, filename = ?, original_filename = ?, mime_type = ?, size = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        title,
+        description,
+        departmentId,
+        normalizeFilename(req.file.filename),
+        cleanDisplayFilename(req.file.originalname),
+        libraryTypeFor(req.file.filename).mimeType,
+        req.file.size,
+        timestamp,
+        id
+      );
+      removeLibraryFile(existing.filename);
+    } else {
+      db.prepare(`
+        UPDATE library_files
+        SET title = ?, description = ?, department_id = ?, updated_at = ?
+        WHERE id = ?
+      `).run(title, description, departmentId, timestamp, id);
+    }
+
+    setFlash(req, 'success', req.file ? 'Library file replaced.' : 'Library file updated.');
+    redirectTo(req, res, `/library/${id}`);
+  }
+);
+
+app.post('/library/:id(\\d+)/delete', (req, res) => {
+  const file = getLibraryFile(Number(req.params.id));
+  if (!file) {
+    setFlash(req, 'error', 'That library file could not be found.');
+    redirectTo(req, res, '/library');
+    return;
+  }
+
+  db.prepare('DELETE FROM library_files WHERE id = ?').run(file.id);
+  removeLibraryFile(file.filename);
+  setFlash(req, 'success', `${file.title} was removed from the Library.`);
+  redirectTo(req, res, '/library');
+});
+
 app.get('/issues/new', (_req, res) => {
   renderIssueForm(res, {
     title: 'Add Issue',
@@ -1184,52 +2121,46 @@ app.get('/issues/new', (_req, res) => {
   });
 });
 
-app.post('/issues', uploadMiddleware(attachmentUpload.array('attachments', 12), '/issues/new'), (req, res) => {
-  const departmentIds = validDepartmentIds(selectedIdsFrom(req.body.department_ids));
-  const posterName = String(req.body.poster_name || '').trim().slice(0, 120);
-  const status = normalizeStatus(req.body.status);
-  const issueHtml = sanitizeEditorHtml(req.body.issue_html);
-  const resolutionHtml = sanitizeEditorHtml(req.body.resolution_html);
+app.post(
+  '/issues',
+  uploadMiddleware(attachmentUpload.array('attachments', MAX_ATTACHMENT_FILES), '10 MB', issueUploadError),
+  requireCsrf,
+  (req, res) => {
+    const issue = issueFromBody(req);
+    const validationError = issueValidationError(issue);
+    if (validationError) {
+      rerenderIssueForm(req, res, { issue, message: validationError });
+      return;
+    }
 
-  if (!posterName) {
-    removeUploadedFiles(req.files);
-    setFlash(req, 'error', 'Add your name before saving.');
-    redirectTo(req, res, '/issues/new');
-    return;
+    const timestamp = nowIso();
+    const createIssue = db.transaction(() => {
+      const result = db
+        .prepare(`
+          INSERT INTO issues (department_id, poster_name, status, issue_html, resolution_html, search_text, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          issue.department_ids[0],
+          issue.poster_name,
+          issue.status,
+          issue.issue_html,
+          issue.resolution_html,
+          issueSearchText(issue.issue_html, issue.resolution_html),
+          timestamp,
+          timestamp
+        );
+
+      saveIssueDepartments(result.lastInsertRowid, issue.department_ids);
+      return result.lastInsertRowid;
+    });
+
+    const issueId = createIssue();
+    insertAttachments(issueId, req.files);
+    setFlash(req, 'success', 'Issue added.');
+    redirectTo(req, res, '/');
   }
-
-  if (departmentIds.length === 0) {
-    removeUploadedFiles(req.files);
-    setFlash(req, 'error', 'Choose at least one department before saving.');
-    redirectTo(req, res, '/issues/new');
-    return;
-  }
-
-  if (!textFromHtml(issueHtml)) {
-    removeUploadedFiles(req.files);
-    setFlash(req, 'error', 'Add the issue details before saving.');
-    redirectTo(req, res, '/issues/new');
-    return;
-  }
-
-  const timestamp = nowIso();
-  const createIssue = db.transaction(() => {
-    const result = db
-      .prepare(`
-        INSERT INTO issues (department_id, poster_name, status, issue_html, resolution_html, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `)
-      .run(departmentIds[0], posterName, status, issueHtml, resolutionHtml, timestamp, timestamp);
-
-    saveIssueDepartments(result.lastInsertRowid, departmentIds);
-    return result.lastInsertRowid;
-  });
-
-  const issueId = createIssue();
-  insertAttachments(issueId, req.files);
-  setFlash(req, 'success', 'Issue added.');
-  redirectTo(req, res, '/');
-});
+);
 
 app.get('/issues/:id/edit', (req, res) => {
   const issue = getIssue(Number(req.params.id));
@@ -1249,56 +2180,87 @@ app.get('/issues/:id/edit', (req, res) => {
   });
 });
 
-app.post('/issues/:id', uploadMiddleware(attachmentUpload.array('attachments', 12)), (req, res) => {
-  const issueId = Number(req.params.id);
-  const existingIssue = getIssue(issueId);
+app.post(
+  '/issues/:id',
+  uploadMiddleware(attachmentUpload.array('attachments', MAX_ATTACHMENT_FILES), '10 MB', issueUploadError),
+  requireCsrf,
+  (req, res) => {
+    const issueId = Number(req.params.id);
+    const existingIssue = getIssue(issueId);
 
-  if (!existingIssue) {
+    if (!existingIssue) {
+      removeUploadedFiles(req.files);
+      setFlash(req, 'error', 'That issue could not be found.');
+      redirectTo(req, res, '/');
+      return;
+    }
+
+    const baseUpdatedAt = String(req.body.base_updated_at || '');
+    const issue = issueFromBody(req, {
+      id: existingIssue.id,
+      created_at: existingIssue.created_at,
+      updated_at: baseUpdatedAt || existingIssue.updated_at
+    });
+
+    if (baseUpdatedAt && baseUpdatedAt !== existingIssue.updated_at) {
+      // Point the form at the latest version so saving again deliberately replaces it.
+      issue.updated_at = existingIssue.updated_at;
+      rerenderIssueForm(req, res, {
+        issue,
+        status: 409,
+        message: 'Someone else saved this issue while you were editing. Your version is shown below: save again to replace theirs, or cancel to keep theirs.'
+      });
+      return;
+    }
+
+    const validationError = issueValidationError(issue);
+    if (validationError) {
+      rerenderIssueForm(req, res, { issue, message: validationError });
+      return;
+    }
+
+    deleteAttachmentFiles(issueId, req.body.delete_attachment_ids);
+    const updateIssue = db.transaction(() => {
+      db.prepare(`
+        UPDATE issues
+        SET department_id = ?, poster_name = ?, status = ?, issue_html = ?, resolution_html = ?, search_text = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        issue.department_ids[0],
+        issue.poster_name,
+        issue.status,
+        issue.issue_html,
+        issue.resolution_html,
+        issueSearchText(issue.issue_html, issue.resolution_html),
+        nowIso(),
+        issueId
+      );
+      saveIssueDepartments(issueId, issue.department_ids);
+    });
+    updateIssue();
+    insertAttachments(issueId, req.files);
+
+    setFlash(req, 'success', 'Issue updated.');
+    redirectTo(req, res, '/');
+  }
+);
+
+app.post('/issues/:id/delete', (req, res) => {
+  const issueId = Number(req.params.id);
+  const issue = getIssue(issueId);
+  if (!issue) {
     setFlash(req, 'error', 'That issue could not be found.');
     redirectTo(req, res, '/');
     return;
   }
 
-  const departmentIds = validDepartmentIds(selectedIdsFrom(req.body.department_ids));
-  const posterName = String(req.body.poster_name || '').trim().slice(0, 120);
-  const status = normalizeStatus(req.body.status);
-  const issueHtml = sanitizeEditorHtml(req.body.issue_html);
-  const resolutionHtml = sanitizeEditorHtml(req.body.resolution_html);
-
-  if (!posterName) {
-    removeUploadedFiles(req.files);
-    setFlash(req, 'error', 'Add the submitter name before saving.');
-    redirectTo(req, res, `/issues/${issueId}/edit`);
-    return;
+  const attachments = getAttachments(issueId);
+  db.prepare('DELETE FROM issues WHERE id = ?').run(issueId);
+  for (const attachment of attachments) {
+    removeAttachmentFile(attachment.filename);
   }
 
-  if (departmentIds.length === 0) {
-    removeUploadedFiles(req.files);
-    setFlash(req, 'error', 'Choose at least one department before saving.');
-    redirectTo(req, res, `/issues/${issueId}/edit`);
-    return;
-  }
-
-  if (!textFromHtml(issueHtml)) {
-    removeUploadedFiles(req.files);
-    setFlash(req, 'error', 'Add the issue details before saving.');
-    redirectTo(req, res, `/issues/${issueId}/edit`);
-    return;
-  }
-
-  deleteAttachmentFiles(issueId, req.body.delete_attachment_ids);
-  const updateIssue = db.transaction(() => {
-    db.prepare(`
-      UPDATE issues
-      SET department_id = ?, poster_name = ?, status = ?, issue_html = ?, resolution_html = ?, updated_at = ?
-      WHERE id = ?
-    `).run(departmentIds[0], posterName, status, issueHtml, resolutionHtml, nowIso(), issueId);
-    saveIssueDepartments(issueId, departmentIds);
-  });
-  updateIssue();
-  insertAttachments(issueId, req.files);
-
-  setFlash(req, 'success', 'Issue updated.');
+  setFlash(req, 'success', `Issue #${issueId} deleted.`);
   redirectTo(req, res, '/');
 });
 
@@ -1310,7 +2272,14 @@ app.get('/uploads/:filename', (req, res) => {
     return;
   }
 
-  res.type(attachment.mime_type);
+  if (allowedAttachmentTypes.has(attachment.mime_type)) {
+    res.type(attachment.mime_type);
+  } else {
+    // Anything outside the allowlist is only offered as a download, never rendered by the browser.
+    // attachment() guesses a type from the extension, so the type must be set after it.
+    res.attachment(attachment.original_filename || filename);
+    res.type('application/octet-stream');
+  }
   res.sendFile(path.join(UPLOAD_DIR, filename));
 });
 
@@ -1324,9 +2293,9 @@ app.get('/settings', (_req, res) => {
     currentTheme: getSetting('theme', 'dark'),
     backupFrequency,
     backupLastRunAt,
-    backupLastRunLabel: backupLastRunAt ? formatDate(backupLastRunAt) : '',
-    nextBackupLabel: backupLastRunAt ? formatDate(nextBackupTime(backupLastRunAt, backupFrequency)) : 'Next backup check',
-    backupFiles: listBackupArchives()
+    nextBackupAt: backupLastRunAt ? nextBackupTime(backupLastRunAt, backupFrequency).toISOString() : '',
+    backupFiles: listBackupArchives(),
+    minPasswordLength: MIN_PASSWORD_LENGTH
   });
 });
 
@@ -1343,29 +2312,35 @@ app.post('/settings/title', (req, res) => {
   redirectTo(req, res, '/settings');
 });
 
-app.post('/settings/logo', uploadMiddleware(logoUpload.single('logo'), '/settings'), (req, res) => {
-  if (!req.file) {
-    setFlash(req, 'error', 'Choose a logo image to upload.');
+app.post(
+  '/settings/logo',
+  uploadMiddleware(logoUpload.single('logo'), '3 MB', redirectOnUploadError('/settings')),
+  requireCsrf,
+  (req, res) => {
+    if (!req.file) {
+      setFlash(req, 'error', 'Choose a logo image to upload.');
+      redirectTo(req, res, '/settings');
+      return;
+    }
+
+    const oldLogo = normalizeFilename(getSetting('logo_filename'));
+    setSetting('logo_filename', normalizeFilename(req.file.filename));
+
+    if (oldLogo && oldLogo !== req.file.filename) {
+      fs.rm(path.join(LOGO_DIR, oldLogo), { force: true }, () => {});
+    }
+
+    setFlash(req, 'success', 'Logo updated.');
     redirectTo(req, res, '/settings');
-    return;
   }
-
-  const oldLogo = getSetting('logo_filename');
-  setSetting('logo_filename', normalizeFilename(req.file.filename));
-
-  if (oldLogo && oldLogo !== req.file.filename) {
-    fs.rm(path.join(LOGO_DIR, oldLogo), { force: true }, () => {});
-  }
-
-  setFlash(req, 'success', 'Logo updated.');
-  redirectTo(req, res, '/settings');
-});
+);
 
 app.post('/settings/theme', (req, res) => {
   const theme = req.body.theme === 'light' ? 'light' : 'dark';
   setSetting('theme', theme);
-  req.session.theme = theme;
-  setFlash(req, 'success', 'Theme preference saved.');
+  // Let this device follow the new default instead of its own Theme-button choice.
+  res.clearCookie(THEME_COOKIE, { path: '/' });
+  setFlash(req, 'success', 'Default theme saved. Devices that picked a theme with the Theme button keep their own choice.');
   redirectTo(req, res, '/settings');
 });
 
@@ -1396,7 +2371,19 @@ app.get('/settings/backups/:filename', (req, res) => {
   res.download(filePath, path.basename(filePath));
 });
 
-app.get('/settings/export', async (req, res) => {
+app.post('/settings/backups/:filename/delete', (req, res) => {
+  const filePath = backupArchivePath(req.params.filename);
+  if (!filePath || !fs.existsSync(filePath)) {
+    setFlash(req, 'error', 'That backup could not be found.');
+    redirectTo(req, res, '/settings');
+    return;
+  }
+  fs.rmSync(filePath, { force: true });
+  setFlash(req, 'success', 'Backup deleted.');
+  redirectTo(req, res, '/settings');
+});
+
+app.post('/settings/export', async (req, res) => {
   const tmpRoot = fs.mkdtempSync(path.join(TMP_DIR, 'download-'));
   const filename = backupArchiveFilename('download');
   const filePath = path.join(tmpRoot, filename);
@@ -1418,30 +2405,44 @@ app.get('/settings/export', async (req, res) => {
   }
 });
 
-app.post('/settings/import', uploadMiddleware(backupUpload.single('backup'), '/settings'), (req, res) => {
-  if (!req.file) {
-    setFlash(req, 'error', 'Choose a backup file to import.');
-    redirectTo(req, res, '/settings');
-    return;
-  }
-
-  try {
-    const extension = path.extname(req.file.originalname || req.file.filename || '').toLowerCase();
-    if (extension === '.json') {
-      const backup = JSON.parse(fs.readFileSync(req.file.path, 'utf8'));
-      restoreBackupData(backup);
-    } else {
-      restoreBackupArchive(req.file.path);
+app.post(
+  '/settings/import',
+  uploadMiddleware(backupUpload.single('backup'), '5 GB', redirectOnUploadError('/settings')),
+  requireCsrf,
+  async (req, res) => {
+    if (!req.file) {
+      setFlash(req, 'error', 'Choose a backup file to import.');
+      redirectTo(req, res, '/settings');
+      return;
     }
-    setFlash(req, 'success', 'Backup restored.');
-  } catch (error) {
-    console.error(error);
-    setFlash(req, 'error', error.message || 'The backup could not be restored.');
-  } finally {
-    fs.rm(req.file.path, { force: true }, () => {});
+
+    try {
+      const safetyBackup = await createStoredBackup('pre-restore');
+      pruneBackups('-pre-restore.zip', PRE_RESTORE_BACKUP_RETENTION);
+
+      const extension = path.extname(req.file.originalname || req.file.filename || '').toLowerCase();
+      let result;
+      if (extension === '.json') {
+        const backup = JSON.parse(fs.readFileSync(req.file.path, 'utf8'));
+        result = restoreBackupData(backup);
+      } else {
+        result = await restoreBackupArchive(req.file.path);
+      }
+
+      if (result.passwordChanged) {
+        // The restored password replaces the old one, so sign everyone else out as a password change would.
+        signOutOtherSessions(req);
+      }
+      setFlash(req, 'success', `Backup restored. The previous data was saved first as ${safetyBackup.filename}.`);
+    } catch (error) {
+      console.error(error);
+      setFlash(req, 'error', error.message || 'The backup could not be restored.');
+    } finally {
+      fs.rm(req.file.path, { force: true }, () => {});
+    }
+    redirectTo(req, res, '/settings');
   }
-  redirectTo(req, res, '/settings');
-});
+);
 
 app.post('/settings/departments', (req, res) => {
   const name = String(req.body.name || '').trim().slice(0, 80);
@@ -1481,7 +2482,11 @@ app.post('/settings/departments/:id', (req, res) => {
 
 app.post('/settings/departments/:id/delete', (req, res) => {
   const id = Number(req.params.id);
-  const used = db.prepare('SELECT COUNT(*) AS count FROM issue_departments WHERE department_id = ?').get(id).count;
+  const used = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM issue_departments WHERE department_id = ?)
+      + (SELECT COUNT(*) FROM issues WHERE department_id = ?) AS count
+  `).get(id, id).count;
   if (used > 0) {
     setFlash(req, 'error', 'That department is used by existing issues, so it cannot be deleted.');
     redirectTo(req, res, '/settings');
@@ -1493,25 +2498,31 @@ app.post('/settings/departments/:id/delete', (req, res) => {
   redirectTo(req, res, '/settings');
 });
 
-app.post('/settings/password', (req, res) => {
-  const password = String(req.body.password || '');
-  const confirmPassword = String(req.body.confirm_password || '');
+app.post('/settings/password', async (req, res, next) => {
+  try {
+    const password = String(req.body.password || '');
+    const confirmPassword = String(req.body.confirm_password || '');
 
-  if (password.length < 4) {
-    setFlash(req, 'error', 'Use at least 4 characters for the shared password.');
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      setFlash(req, 'error', `Use at least ${MIN_PASSWORD_LENGTH} characters for the shared password.`);
+      redirectTo(req, res, '/settings');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setFlash(req, 'error', 'The new passwords did not match.');
+      redirectTo(req, res, '/settings');
+      return;
+    }
+
+    setSetting('password_hash', await bcrypt.hash(password, 12));
+    setSetting('password_is_default', '0');
+    signOutOtherSessions(req);
+    setFlash(req, 'success', 'Password updated. Everyone else will need to sign in again with the new password.');
     redirectTo(req, res, '/settings');
-    return;
+  } catch (error) {
+    next(error);
   }
-
-  if (password !== confirmPassword) {
-    setFlash(req, 'error', 'The new passwords did not match.');
-    redirectTo(req, res, '/settings');
-    return;
-  }
-
-  setSetting('password_hash', bcrypt.hashSync(password, 12));
-  setFlash(req, 'success', 'Password updated.');
-  redirectTo(req, res, '/settings');
 });
 
 app.use((_req, res) => {
@@ -1523,7 +2534,7 @@ app.use((error, _req, res, _next) => {
   res.status(500).render('error', { appName: APP_NAME });
 });
 
-app.listen(PORT, () => {
-  console.log(`${APP_NAME} listening on port ${PORT}`);
+const server = app.listen(PORT, () => {
+  console.log(`${APP_NAME} listening on port ${server.address().port}`);
   startScheduledBackups();
 });

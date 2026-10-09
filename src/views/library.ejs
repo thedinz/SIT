@@ -1,0 +1,168 @@
+<%- include('partials/top', { title: 'Library' }) %>
+
+<section class="page-heading library-heading">
+  <div>
+    <p class="eyebrow">Team documents</p>
+    <h1>Library</h1>
+    <p class="meta-line">Files every team keeps on hand, like stage plots, input lists, checklists, and manuals. These stay here whether or not an issue is open.</p>
+  </div>
+  <a class="primary-button compact" href="#upload">Upload Files</a>
+</section>
+
+<%# Phone layout: a Drive-style search bar, folders per department, and a floating upload button. %>
+<% if (totalCount > 0) { %>
+  <form class="drive-search phone-only" method="get" action="<%= urlFor('/library') %>" role="search">
+    <% if (filters.department !== 'all') { %>
+      <input type="hidden" name="department" value="<%= filters.department %>">
+    <% } %>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+    <label class="visually-hidden" for="drive-q">Search the Library</label>
+    <input id="drive-q" name="q" type="search" value="<%= filters.q %>" placeholder="<%= currentFolder ? `Search in ${currentFolder.name}` : 'Search the Library' %>" enterkeyhint="search">
+  </form>
+<% } %>
+
+<% if (!atRoot) { %>
+  <nav class="drive-crumbs phone-only" aria-label="Library location">
+    <a href="<%= urlFor('/library') %>">&lsaquo; Library</a>
+    <span><%= filters.q ? `Results for "${filters.q}"` : (currentFolder ? currentFolder.name : 'All files') %><%= filters.q && currentFolder ? ` in ${currentFolder.name}` : '' %></span>
+  </nav>
+<% } %>
+
+<aside class="install-hint" data-install-hint hidden>
+  <p data-install-text>Add the Library to your home screen to open it like an app.</p>
+  <div class="install-hint-actions">
+    <button class="primary-button compact" type="button" data-install-button hidden>Install</button>
+    <button class="secondary-button compact" type="button" data-install-dismiss>Not now</button>
+  </div>
+</aside>
+
+<% if (atRoot && folders.length > 0 && totalCount > 0) { %>
+  <section class="drive-folders phone-only" aria-labelledby="drive-folders-title">
+    <h2 class="drive-section-title" id="drive-folders-title">Folders</h2>
+    <div class="drive-folder-grid">
+      <% folders.forEach((folder) => { %>
+        <a class="drive-folder" href="<%= urlFor(`/library?department=${folder.key}`) %>">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7a1.5 1.5 0 0 1 1.5-1.5h4.4l2 2.2H19a1.5 1.5 0 0 1 1.5 1.5v8.3A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z"/></svg>
+          <span class="drive-folder-name"><%= folder.name %></span>
+          <span class="drive-folder-count"><%= folder.count %> <%= folder.count === 1 ? 'file' : 'files' %></span>
+        </a>
+      <% }) %>
+    </div>
+  </section>
+<% } %>
+
+<button class="upload-fab" type="button" data-upload-fab aria-controls="upload">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+  <span>Upload</span>
+</button>
+
+<details class="settings-card upload-panel" id="upload" <%= totalCount === 0 ? 'open' : '' %>>
+  <summary><h2>Upload files</h2></summary>
+  <form class="stack" method="post" action="<%= urlFor('/library') %>" enctype="multipart/form-data" data-library-form data-max-files="<%= maxFiles %>" data-max-file-size="<%= maxFileSize %>" data-accept="<%= acceptList %>">
+    <%- include('partials/csrf') %>
+    <div class="form-error" role="alert" data-form-error hidden></div>
+    <div class="field">
+      <label for="library-files">Files</label>
+      <input id="library-files" name="files" type="file" multiple required accept="<%= acceptList %>" data-library-files>
+      <p class="field-hint">Word, Excel, PowerPoint, PDF, images, or text files. Up to <%= maxFiles %> files of <%= formatBytes(maxFileSize) %> each.</p>
+    </div>
+    <fieldset class="library-titles" data-library-titles hidden>
+      <legend>Titles</legend>
+      <p class="field-hint">This is the name people see in the Library. It starts from the file name; change it to anything you like.</p>
+      <div class="stack" data-library-title-list></div>
+    </fieldset>
+    <div class="upload-grid">
+      <div class="field">
+        <label for="library-department">Department</label>
+        <select id="library-department" name="department_id">
+          <option value="">General (all teams)</option>
+          <% departments.forEach((department) => { %>
+            <option value="<%= department.id %>"><%= department.name %></option>
+          <% }) %>
+        </select>
+      </div>
+      <div class="field">
+        <label for="library-description">Description <span class="optional">(optional)</span></label>
+        <input id="library-description" name="description" type="text" maxlength="500" placeholder="e.g. Current stage plot for Sunday services">
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="primary-button" type="submit">Upload to Library</button>
+    </div>
+  </form>
+</details>
+
+<% if (totalCount > 0) { %>
+  <form class="control-bar library-controls" method="get" action="<%= urlFor('/library') %>">
+    <div class="field search-field">
+      <label for="q">Search</label>
+      <input id="q" name="q" type="search" value="<%= filters.q %>" placeholder="Search names and descriptions">
+    </div>
+    <div class="field">
+      <label for="department">Department</label>
+      <select id="department" name="department">
+        <option value="all">All</option>
+        <option value="general" <%= filters.department === 'general' ? 'selected' : '' %>>General</option>
+        <% departments.forEach((department) => { %>
+          <option value="<%= department.id %>" <%= filters.department === String(department.id) ? 'selected' : '' %>><%= department.name %></option>
+        <% }) %>
+      </select>
+    </div>
+    <div class="control-actions">
+      <button class="secondary-button" type="submit">Apply</button>
+      <a class="ghost-button" href="<%= urlFor('/library') %>">Clear</a>
+    </div>
+  </form>
+<% } %>
+
+<% if (totalCount === 0) { %>
+  <section class="empty-state">
+    <h2>The Library is empty</h2>
+    <p>Upload documents your teams need to find quickly. Anyone signed in can open them right in the browser.</p>
+  </section>
+<% } else if (fileCount === 0) { %>
+  <section class="empty-state">
+    <h2>No matching files</h2>
+    <p>Try a different search or department.</p>
+  </section>
+<% } else { %>
+  <div class="stack library-groups<%= atRoot ? ' library-at-root' : '' %>">
+    <% groups.forEach((group) => { %>
+      <section class="settings-card library-group<%= group.key === 'general' ? ' library-group-general' : '' %>" aria-labelledby="library-group-<%= group.key %>">
+        <div class="files-department-heading">
+          <% if (atRoot && group.key === 'general') { %>
+            <h2 id="library-group-<%= group.key %>"><span class="desktop-only">General</span><span class="phone-only">Files</span></h2>
+          <% } else { %>
+            <h2 id="library-group-<%= group.key %>"><%= group.name %></h2>
+          <% } %>
+          <span class="muted"><%= group.files.length %> <%= group.files.length === 1 ? 'file' : 'files' %></span>
+        </div>
+        <ul class="files-list">
+          <% group.files.forEach((file) => { %>
+            <% const openUrl = urlFor(`/library/${file.id}`); %>
+            <% const downloadUrl = urlFor(`/library/${file.id}/file?download=1`); %>
+            <li class="file-row library-row">
+              <a class="file-badge file-badge-<%= file.badgeFamily %>" href="<%= openUrl %>" aria-hidden="true" tabindex="-1"><%= file.extension %><% if (file.viewer === 'image') { %><img class="file-badge-thumb" src="<%= urlFor(`/library/${file.id}/file`) %>" alt="" loading="lazy" decoding="async"><% } %></a>
+              <div class="file-details">
+                <a class="file-link" href="<%= openUrl %>"><%= file.title %></a>
+                <% if (file.description) { %>
+                  <span class="library-description"><%= file.description %></span>
+                <% } %>
+                <span class="muted"><%= file.typeLabel %> &middot; <%= formatBytes(file.size) %> &middot; Updated <%- localTime(file.updated_at) %></span>
+              </div>
+              <div class="backup-row-actions">
+                <a class="secondary-button compact" href="<%= openUrl %>">Open</a>
+                <a class="ghost-button compact" href="<%= downloadUrl %>">Download</a>
+              </div>
+              <button class="row-menu-button" type="button" aria-label="More actions for <%= file.title %>" data-file-menu data-title="<%= file.title %>" data-open="<%= openUrl %>" data-download="<%= downloadUrl %>" data-edit="<%= urlFor(`/library/${file.id}/edit`) %>">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5.5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18.5" r="1.6"/></svg>
+              </button>
+            </li>
+          <% }) %>
+        </ul>
+      </section>
+    <% }) %>
+  </div>
+<% } %>
+
+<%- include('partials/bottom') %>

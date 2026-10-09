@@ -2,8 +2,16 @@
 <html lang="en" data-theme="<%= theme || 'dark' %>">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title><%= typeof title !== 'undefined' && title ? `${title} | ${displayTitle}` : displayTitle %></title>
+    <link rel="icon" href="<%= faviconUrl %>">
+    <link rel="apple-touch-icon" href="<%= touchIconUrl %>">
+    <link rel="manifest" href="<%= urlFor('/manifest.webmanifest') %>">
+    <meta name="theme-color" content="<%= theme === 'light' ? '#ffffff' : '#111823' %>">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="<%= displayTitle %>">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <link rel="stylesheet" href="<%= urlFor(`/css/styles.css?v=${assetVersion}`) %>">
     <script defer src="<%= urlFor(`/js/app.js?v=${assetVersion}`) %>"></script>
   </head>
@@ -21,11 +29,30 @@
         <nav class="nav-links" aria-label="Primary navigation">
           <a class="<%= currentPath === '/' ? 'active' : '' %>" href="<%= urlFor('/') %>">Dashboard</a>
           <a class="<%= currentPath === '/issues/new' ? 'active' : '' %>" href="<%= urlFor('/issues/new') %>">Add Issue</a>
+          <a class="<%= currentPath === '/library' || currentPath.startsWith('/library/') ? 'active' : '' %>" href="<%= urlFor('/library') %>" <%- currentPath === '/library' ? 'aria-current="page"' : '' %>>Library</a>
           <a class="<%= currentPath === '/settings' ? 'active' : '' %>" href="<%= urlFor('/settings') %>">Settings</a>
           <button class="theme-toggle" type="button" data-theme-toggle aria-label="Toggle theme">Theme</button>
-          <a class="logout-link" href="<%= urlFor('/logout') %>">Logout</a>
+          <form class="logout-form" method="post" action="<%= urlFor('/logout') %>">
+            <%- include('csrf') %>
+            <button class="logout-link" type="submit">Logout</button>
+          </form>
         </nav>
       </header>
+      <% const tabs = [
+        { href: '/', label: 'Dashboard', icon: 'home', active: currentPath === '/' },
+        { href: '/library', label: 'Library', icon: 'folder', active: currentPath === '/library' || currentPath.startsWith('/library/') },
+        { href: '/issues/new', label: 'Add Issue', icon: 'plus', active: currentPath === '/issues/new' },
+        { href: '/settings', label: 'Settings', icon: 'gear', active: currentPath === '/settings' }
+      ]; %>
+      <%# Phone-only bottom navigation, like an installed app; the header links are hidden on phones. %>
+      <nav class="tab-bar" aria-label="App navigation">
+        <% tabs.forEach((tab) => { %>
+          <a class="<%= tab.active ? 'active' : '' %>" href="<%= urlFor(tab.href) %>" <%- tab.active ? 'aria-current="page"' : '' %>>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><%- include('tab-icon', { name: tab.icon }) %></svg>
+            <span><%= tab.label %></span>
+          </a>
+        <% }) %>
+      </nav>
     <% } %>
     <main class="<%= isAuthenticated ? 'page-shell' : 'login-shell' %>">
       <%- include('flash') %>

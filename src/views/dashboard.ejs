@@ -2,16 +2,21 @@
 
 <section class="page-heading">
   <div>
-    <p class="eyebrow">Issue and resolution log</p>
+    <p class="eyebrow phone-hide">Issue and resolution log</p>
     <h1>Dashboard</h1>
   </div>
-  <a class="primary-button compact" href="<%= urlFor('/issues/new') %>">Add Issue</a>
+  <a class="primary-button compact phone-hide" href="<%= urlFor('/issues/new') %>">Add Issue</a>
 </section>
 
-<form class="control-bar" method="get" action="<%= urlFor('/') %>">
+<% const filtersChanged = !['', 'all'].includes(String(filters.department)) || filters.sort !== 'newest' || filters.pageSize !== 10; %>
+<%# On phones only search shows until Filters is tapped; it starts open when a filter is already applied. %>
+<form class="control-bar dashboard-filters<%= filtersChanged ? ' filters-open' : '' %>" method="get" action="<%= urlFor('/') %>" data-filter-form>
   <div class="field search-field">
     <label for="q">Search</label>
-    <input id="q" name="q" type="search" value="<%= filters.q %>" placeholder="Search issues, resolutions, departments">
+    <div class="search-row">
+      <input id="q" name="q" type="search" value="<%= filters.q %>" placeholder="Search issues, resolutions, departments" enterkeyhint="search">
+      <button class="secondary-button filter-toggle" type="button" data-filter-toggle aria-expanded="<%= filtersChanged %>">Filters</button>
+    </div>
   </div>
   <div class="field">
     <label for="department">Department</label>
@@ -57,17 +62,17 @@
       <article class="issue-card">
         <section class="date-cell">
           <span class="status-pill status-<%= issue.status === 'resolved' ? 'resolved' : 'pending' %>"><%= issue.status === 'resolved' ? 'Resolved' : 'Pending' %></span>
-          <span class="date-text"><%= formatDate(issue.created_at) %></span>
+          <span class="date-text"><%- localTime(issue.created_at) %></span>
           <% if (issue.poster_name) { %>
             <span class="submitted-by">By <%= issue.poster_name %></span>
           <% } %>
           <div class="department-stack">
-            <% String(issue.department_names || '').split(', ').filter(Boolean).forEach((departmentName) => { %>
+            <% issue.department_list.forEach((departmentName) => { %>
               <span class="department-pill"><%= departmentName %></span>
             <% }) %>
           </div>
           <% if (issue.updated_at !== issue.created_at) { %>
-            <span class="updated-text">Updated <%= formatDate(issue.updated_at) %></span>
+            <span class="updated-text">Updated <%- localTime(issue.updated_at) %></span>
           <% } %>
         </section>
         <section class="log-cell issue-cell">
@@ -76,7 +81,7 @@
           <% if (attachments.length > 0) { %>
             <div class="attachment-strip" aria-label="Attachments">
               <% attachments.forEach((attachment) => { %>
-                <a class="attachment-chip" href="<%= urlFor(`/uploads/${attachment.filename}`) %>" target="_blank" rel="noopener noreferrer">
+                <a class="attachment-chip" href="<%= urlFor(`/uploads/${attachment.filename}`) %>" target="_blank" rel="noopener noreferrer" <%- attachment.mime_type.startsWith('image/') ? 'data-viewer-image' : '' %>>
                   <% if (attachment.mime_type.startsWith('image/')) { %>
                     <img src="<%= urlFor(`/uploads/${attachment.filename}`) %>" alt="">
                   <% } %>

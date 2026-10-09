@@ -7,4 +7,3 @@ data/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
-.claude/settings.local.json

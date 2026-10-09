@@ -124,8 +124,12 @@ function departmentId(name) {
   }
 }
 
+// A fresh server makes its first scheduled backup 5 seconds after starting, so leave
+// those out; on slower machines one lands mid-suite and sorts before the test's own.
 function backupFiles() {
-  return fs.readdirSync(path.join(dataDir, 'backups')).filter((name) => name.endsWith('.zip'));
+  return fs
+    .readdirSync(path.join(dataDir, 'backups'))
+    .filter((name) => name.endsWith('.zip') && !name.endsWith('-scheduled.zip'));
 }
 
 function readZip(zipPath) {

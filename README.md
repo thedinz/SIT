@@ -278,3 +278,7 @@ docker build -t simple-issue-tracker:local .
 ```bash
 docker compose up -d
 ```
+
+## License
+
+Released under the [MIT License](LICENSE).

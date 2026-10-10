@@ -1,20 +1,21 @@
 {
   "name": "simple-issue-tracker",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "A simple self-hosted issue-and-resolution log for church production teams.",
   "main": "src/server.js",
+  "license": "MIT",
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "check": "node --check src/server.js && node --check src/db.js && node --check src/sanitize.js && node --check src/library.js && node --check src/public/js/app.js",
-    "test": "node --test test/"
+    "test": "node --test"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
-    "better-sqlite3": "^11.8.1",
+    "better-sqlite3": "^12.11.1",
     "compression": "^1.7.5",
     "content-disposition": "^0.5.4",
     "cookie-session": "^2.1.0",

@@ -1000,33 +1000,122 @@ body.viewer-open {
 .editor-toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 6px 12px;
   padding: 8px;
   border-bottom: 1px solid var(--border);
   background: var(--surface-strong);
 }
 
+.editor-group {
+  display: flex;
+  gap: 4px;
+}
+
 .editor-toolbar button {
-  min-width: 34px;
-  min-height: 32px;
-  padding: 5px 9px;
-  border: 1px solid var(--border);
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid transparent;
   border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.editor-toolbar button:hover {
+  border-color: var(--border);
   color: var(--text);
   background: var(--surface);
-  font-weight: 850;
+}
+
+.editor-toolbar button[aria-pressed="true"] {
+  border-color: var(--issue-border);
+  color: var(--accent);
+  background: var(--issue-bg);
+}
+
+.editor-toolbar svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.editor-toolbar circle {
+  fill: currentColor;
+  stroke: none;
+}
+
+.editor-linkbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-strong);
+}
+
+.editor-linkbar[hidden],
+.editor-linkbar [hidden] {
+  display: none;
+}
+
+.editor-linkbar input {
+  flex: 1 1 220px;
+  min-height: 38px;
+  padding: 7px 11px;
+}
+
+.editor-linkbar input[aria-invalid="true"] {
+  border-color: var(--danger);
 }
 
 .editor-surface {
+  position: relative;
   min-height: 170px;
   padding: 13px;
   border: 1px solid transparent;
+  line-height: 1.55;
   outline: none;
 }
 
-.editor-surface:empty::before {
+.editor-surface p,
+.editor-surface ul,
+.editor-surface ol,
+.editor-surface blockquote {
+  margin: 0 0 0.6em;
+}
+
+.editor-surface ul,
+.editor-surface ol {
+  padding-left: 1.6em;
+}
+
+.editor-surface.is-empty::before {
+  position: absolute;
+  top: 13px;
+  left: 13px;
   color: var(--muted);
   content: attr(data-placeholder);
+  pointer-events: none;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 16px;
+}
+
+@media (max-width: 560px) {
+  .field-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .form-actions {

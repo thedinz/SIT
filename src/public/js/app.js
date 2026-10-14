@@ -157,12 +157,132 @@
   }
 
 
+  // Tags the server keeps (see src/sanitize.js); pasted HTML is reduced to these so the editor
+  // shows what will actually be saved.
+  const PASTE_KEEP = {
+    P: 'p', DIV: 'p', H1: 'p', H2: 'p', H3: 'p', H4: 'p', H5: 'p', H6: 'p', TR: 'p',
+    BR: 'br', STRONG: 'strong', B: 'strong', EM: 'em', I: 'em', U: 'u',
+    UL: 'ul', OL: 'ol', LI: 'li', A: 'a', BLOCKQUOTE: 'blockquote'
+  };
+  const PASTE_DROP = ['SCRIPT', 'STYLE', 'META', 'LINK', 'TITLE', 'HEAD', 'IMG', 'SVG', 'VIDEO', 'AUDIO', 'IFRAME', 'OBJECT', 'TEMPLATE', 'NOSCRIPT'];
+  const LINK_SCHEMES = /^(https?:|mailto:|tel:)/i;
+  const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+
+  function escapeHtml(text) {
+    return String(text).replace(/[&<>"]/g, function (character) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[character];
+    });
+  }
+
+  // Word and Google Docs mark bold, italic and underline with inline styles rather than tags.
+  // The style attribute is read as text: parsed paste documents don't fill in element.style.
+  function styleValue(element, property) {
+    const match = new RegExp('(?:^|;)\\s*' + property + '\\s*:\\s*([^;]+)', 'i').exec(element.getAttribute('style') || '');
+    return match ? match[1].trim().toLowerCase() : '';
+  }
+
+  function styledTag(element) {
+    const weight = styleValue(element, 'font-weight');
+    if (weight === 'bold' || weight === 'bolder' || Number(weight) >= 600) return 'strong';
+    if (styleValue(element, 'font-style') === 'italic') return 'em';
+    if (/underline/.test(styleValue(element, 'text-decoration') + styleValue(element, 'text-decoration-line'))) return 'u';
+    return '';
+  }
+
+  function cleanPastedNodes(source, target) {
+    Array.from(source.childNodes).forEach(function (node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        target.appendChild(document.createTextNode(node.textContent));
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE || PASTE_DROP.indexOf(node.tagName.toUpperCase()) !== -1) return;
+
+      const tagName = node.tagName.toUpperCase();
+      let tag = PASTE_KEEP[tagName] || styledTag(node);
+      // Google Docs wraps a whole paste in <b style="font-weight:normal">.
+      if (tagName === 'B' && /^(normal|400)$/.test(styleValue(node, 'font-weight'))) tag = '';
+
+      if (!tag) {
+        cleanPastedNodes(node, target);
+        if (tagName === 'TD' || tagName === 'TH') target.appendChild(document.createTextNode(' '));
+        return;
+      }
+
+      const element = document.createElement(tag);
+      if (tag === 'a') {
+        const href = node.getAttribute('href') || '';
+        if (!LINK_SCHEMES.test(href)) {
+          cleanPastedNodes(node, target);
+          return;
+        }
+        element.setAttribute('href', href);
+      }
+      cleanPastedNodes(node, element);
+      target.appendChild(element);
+    });
+    return target;
+  }
+
+  function cleanPastedHtml(html) {
+    const parsed = new DOMParser().parseFromString(html, 'text/html');
+    const cleaned = cleanPastedNodes(parsed.body, document.createElement('div'));
+    cleaned.querySelectorAll('p, li, strong, em, u').forEach(function (element) {
+      if (!element.textContent.trim() && !element.querySelector('br')) element.remove();
+    });
+    return cleaned.innerHTML;
+  }
+
+  function normaliseLink(rawUrl) {
+    const url = rawUrl.trim();
+    if (!url) return '';
+    if (/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(url)) return 'mailto:' + url;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return LINK_SCHEMES.test(url) ? url : '';
+    return 'https://' + url;
+  }
+
   document.querySelectorAll('[data-editor]').forEach(function (editor) {
     const surface = editor.querySelector('[data-editor-surface]');
     const hidden = editor.querySelector('input[type="hidden"]');
     if (!surface || !hidden) return;
     const form = editor.closest('form');
     const fileInput = form && form.querySelector('[data-attachment-input]');
+    const buttons = Array.from(editor.querySelectorAll('[data-command]'));
+    const linkBar = editor.querySelector('[data-editor-linkbar]');
+    const linkInput = linkBar && linkBar.querySelector('[data-link-input]');
+    const linkRemove = linkBar && linkBar.querySelector('[data-link-remove]');
+    let savedRange = null;
+    let editingLink = null;
+
+    if (IS_MAC) {
+      buttons.forEach(function (button) {
+        button.title = button.title.replace('Ctrl+', '⌘');
+      });
+    }
+
+    function exec(command, value) {
+      // Enter makes paragraphs and formatting uses tags, which is what the server keeps.
+      document.execCommand('defaultParagraphSeparator', false, 'p');
+      document.execCommand('styleWithCSS', false, false);
+      document.execCommand(command, false, value === undefined ? null : value);
+    }
+
+    function selectionInside() {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return null;
+      const range = selection.getRangeAt(0);
+      return surface.contains(range.commonAncestorContainer) ? range : null;
+    }
+
+    function closestInSurface(node, selector) {
+      const element = node && (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement);
+      const found = element && element.closest(selector);
+      return found && surface.contains(found) ? found : null;
+    }
+
+    function updateEmpty() {
+      const empty = !surface.textContent.trim() && !surface.querySelector('li');
+      surface.classList.toggle('is-empty', empty);
+    }
 
     function sync() {
       // Inline images are never saved (the server strips them), so keep them out of the text.
@@ -170,6 +290,28 @@
         image.remove();
       });
       hidden.value = surface.innerHTML;
+      updateEmpty();
+    }
+
+    function updateToolbar() {
+      const range = selectionInside();
+      buttons.forEach(function (button) {
+        const command = button.getAttribute('data-command');
+        if (command === 'removeFormat') return;
+        let active = false;
+        if (range) {
+          if (command === 'createLink') {
+            active = Boolean(closestInSurface(range.startContainer, 'a'));
+          } else {
+            try {
+              active = document.queryCommandState(command);
+            } catch (error) {
+              active = false;
+            }
+          }
+        }
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
     }
 
     function takeFiles(files) {
@@ -185,35 +327,188 @@
       return true;
     }
 
+    function restoreSelection() {
+      surface.focus();
+      if (!savedRange) return;
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(savedRange);
+    }
+
+    function openLinkBar() {
+      if (!linkBar) return;
+      const range = selectionInside();
+      savedRange = range ? range.cloneRange() : null;
+      editingLink = range ? closestInSurface(range.startContainer, 'a') : null;
+      linkInput.value = editingLink ? editingLink.getAttribute('href') : '';
+      linkRemove.hidden = !editingLink;
+      linkBar.hidden = false;
+      linkInput.focus();
+      linkInput.select();
+    }
+
+    function closeLinkBar(refocus) {
+      if (!linkBar || linkBar.hidden) return;
+      linkBar.hidden = true;
+      linkInput.removeAttribute('aria-invalid');
+      if (refocus) restoreSelection();
+      savedRange = null;
+      editingLink = null;
+      updateToolbar();
+    }
+
+    function applyLink() {
+      const url = normaliseLink(linkInput.value);
+      if (!url) {
+        linkInput.setAttribute('aria-invalid', 'true');
+        linkInput.focus();
+        return;
+      }
+      restoreSelection();
+      if (editingLink) {
+        editingLink.setAttribute('href', url);
+      } else if (!savedRange || savedRange.collapsed) {
+        // Nothing selected: insert the address itself as the link text.
+        const text = url.replace(/^(https?:\/\/|mailto:|tel:)/i, '');
+        exec('insertHTML', '<a href="' + escapeHtml(url) + '">' + escapeHtml(text) + '</a>&nbsp;');
+      } else {
+        exec('createLink', url);
+      }
+      closeLinkBar(false);
+      sync();
+    }
+
+    function removeLink() {
+      restoreSelection();
+      if (editingLink) {
+        const range = document.createRange();
+        range.selectNodeContents(editingLink);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        exec('unlink');
+        selection.collapseToEnd();
+      }
+      closeLinkBar(false);
+      sync();
+    }
+
+    // Typing "- ", "* " or "1. " at the start of a line starts a list.
+    function autoList() {
+      const range = selectionInside();
+      if (!range || !range.collapsed || closestInSurface(range.startContainer, 'li')) return;
+      const block = closestInSurface(range.startContainer, 'p, div, blockquote') || surface;
+      const before = document.createRange();
+      before.setStart(block, 0);
+      before.setEnd(range.startContainer, range.startOffset);
+      const typed = before.toString();
+      const match = /^([-*]|1[.)])[\s ]$/.exec(typed);
+      if (!match) return;
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(before);
+      exec('delete');
+      exec(match[1] === '-' || match[1] === '*' ? 'insertUnorderedList' : 'insertOrderedList');
+      unwrapList();
+    }
+
+    // Chrome sometimes builds a list inside a <p>, which is invalid and leaves a gap once saved.
+    function unwrapList() {
+      const selection = window.getSelection();
+      const list = selection && closestInSurface(selection.anchorNode, 'ul, ol');
+      const wrapper = list && list.parentElement;
+      if (!wrapper || wrapper === surface || wrapper.tagName !== 'P') return;
+      const node = selection.anchorNode;
+      const offset = selection.anchorOffset;
+      wrapper.replaceWith.apply(wrapper, Array.from(wrapper.childNodes));
+      const range = document.createRange();
+      range.setStart(node, offset);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+
     sync();
 
-    editor.querySelectorAll('[data-command]').forEach(function (button) {
+    buttons.forEach(function (button) {
       button.addEventListener('mousedown', function (event) {
+        // Keep the text selection while a button is pressed.
         event.preventDefault();
       });
 
       button.addEventListener('click', function () {
         const command = button.getAttribute('data-command');
-        surface.focus();
-
         if (command === 'createLink') {
-          const rawUrl = window.prompt('Link URL');
-          if (!rawUrl) return;
-          const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(rawUrl);
-          const url = hasScheme ? rawUrl : `https://${rawUrl}`;
-          document.execCommand('createLink', false, url);
-        } else {
-          document.execCommand(command, false, null);
+          if (linkBar && !linkBar.hidden) {
+            closeLinkBar(true);
+          } else {
+            if (!selectionInside()) surface.focus();
+            openLinkBar();
+          }
+          return;
         }
-
+        if (!selectionInside()) surface.focus();
+        exec(command);
+        if (command === 'insertUnorderedList' || command === 'insertOrderedList') unwrapList();
         sync();
+        updateToolbar();
       });
+    });
+
+    if (linkBar) {
+      linkBar.querySelector('[data-link-apply]').addEventListener('click', applyLink);
+      linkRemove.addEventListener('click', removeLink);
+      linkBar.querySelector('[data-link-cancel]').addEventListener('click', function () {
+        closeLinkBar(true);
+      });
+      linkInput.addEventListener('input', function () {
+        linkInput.removeAttribute('aria-invalid');
+      });
+      linkInput.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') {
+          // Enter applies the link instead of submitting the form.
+          event.preventDefault();
+          applyLink();
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          closeLinkBar(true);
+        }
+      });
+    }
+
+    surface.addEventListener('keydown', function (event) {
+      const shortcut = event.ctrlKey || event.metaKey;
+      if (shortcut && !event.altKey && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        openLinkBar();
+        return;
+      }
+      if (event.key === 'Tab' && !shortcut && !event.altKey) {
+        // Tab nests list items; outside a list it moves focus as usual.
+        const range = selectionInside();
+        if (range && closestInSurface(range.startContainer, 'li')) {
+          event.preventDefault();
+          exec(event.shiftKey ? 'outdent' : 'indent');
+          sync();
+        }
+      }
     });
 
     surface.addEventListener('paste', function (event) {
       if (takeFiles(filesFromTransfer(event.clipboardData))) {
         event.preventDefault();
+        return;
       }
+      const html = event.clipboardData && event.clipboardData.getData('text/html');
+      if (!html) return;
+      event.preventDefault();
+      const cleaned = cleanPastedHtml(html);
+      if (cleaned) {
+        exec('insertHTML', cleaned);
+      } else {
+        exec('insertText', event.clipboardData.getData('text/plain'));
+      }
+      sync();
     });
 
     surface.addEventListener('dragover', function (event) {
@@ -228,7 +523,17 @@
       }
     });
 
-    surface.addEventListener('input', sync);
+    surface.addEventListener('input', function (event) {
+      if (event.inputType === 'insertText' && event.data === ' ') autoList();
+      sync();
+      updateToolbar();
+    });
+
+    surface.addEventListener('focus', function () {
+      document.execCommand('defaultParagraphSeparator', false, 'p');
+    });
+
+    document.addEventListener('selectionchange', updateToolbar);
   });
 
   document.querySelectorAll('[data-attachment-input]').forEach(function (input) {

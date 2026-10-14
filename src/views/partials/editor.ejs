@@ -1,10 +1,38 @@
 <div class="editor" data-editor <%= typeof required !== 'undefined' && required ? 'data-editor-required' : '' %> data-editor-label="<%= label %>">
-  <div class="editor-toolbar" aria-label="<%= label %> formatting">
-    <button type="button" data-command="bold" aria-label="Bold"><strong>B</strong></button>
-    <button type="button" data-command="italic" aria-label="Italic"><em>I</em></button>
-    <button type="button" data-command="insertUnorderedList" aria-label="Bullet list">•</button>
-    <button type="button" data-command="insertOrderedList" aria-label="Numbered list">1.</button>
-    <button type="button" data-command="createLink" aria-label="Add link">Link</button>
+  <div class="editor-toolbar" role="toolbar" aria-label="<%= label %> formatting">
+    <div class="editor-group">
+      <button type="button" data-command="bold" aria-pressed="false" title="Bold (Ctrl+B)" aria-label="Bold">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z"/></svg>
+      </button>
+      <button type="button" data-command="italic" aria-pressed="false" title="Italic (Ctrl+I)" aria-label="Italic">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5h8M6 19h8M14 5l-4 14"/></svg>
+      </button>
+      <button type="button" data-command="underline" aria-pressed="false" title="Underline (Ctrl+U)" aria-label="Underline">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v7a5 5 0 0 0 10 0V4M5 20h14"/></svg>
+      </button>
+    </div>
+    <div class="editor-group">
+      <button type="button" data-command="insertUnorderedList" aria-pressed="false" title="Bullet list (type - and a space)" aria-label="Bullet list">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h10M10 12h10M10 18h10"/><circle cx="5" cy="6" r="1.2"/><circle cx="5" cy="12" r="1.2"/><circle cx="5" cy="18" r="1.2"/></svg>
+      </button>
+      <button type="button" data-command="insertOrderedList" aria-pressed="false" title="Numbered list (type 1. and a space)" aria-label="Numbered list">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h10M10 12h10M10 18h10M4 4.5l1.5-.5v4M3.6 14.2a1.4 1.4 0 0 1 2.6.6c0 1-2.6 2-2.6 3.2h2.8"/></svg>
+      </button>
+    </div>
+    <div class="editor-group">
+      <button type="button" data-command="createLink" aria-pressed="false" title="Link (Ctrl+K)" aria-label="Link">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>
+      </button>
+      <button type="button" data-command="removeFormat" title="Clear formatting" aria-label="Clear formatting">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h12M12 5l-3 14M4 20L20 4"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="editor-linkbar" data-editor-linkbar hidden>
+    <input type="text" inputmode="url" placeholder="Paste or type a link" aria-label="Link address" autocomplete="off" data-link-input>
+    <button type="button" class="primary-button compact" data-link-apply>Apply</button>
+    <button type="button" class="ghost-button compact" data-link-remove hidden>Remove link</button>
+    <button type="button" class="ghost-button compact" data-link-cancel>Cancel</button>
   </div>
   <div class="editor-surface rich-text" contenteditable="true" role="textbox" aria-multiline="true" aria-label="<%= label %>" data-editor-surface data-target="<%= name %>" data-placeholder="<%= placeholder %>"><%- value || '' %></div>
   <input type="hidden" name="<%= name %>" value="">

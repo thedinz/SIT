@@ -201,6 +201,19 @@ function libraryRows() {
   }
 }
 
+// On Windows a file deleted while something (often a virus scan) still has it open stays
+// listed for a moment, so give deletes a little time to finish before comparing.
+async function libraryFilesOnDisk() {
+  const directory = path.join(dataDir, 'uploads', 'library');
+  const expected = libraryRows().length;
+  let files = fs.readdirSync(directory).sort();
+  for (let attempt = 0; attempt < 20 && files.length !== expected; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    files = fs.readdirSync(directory).sort();
+  }
+  return files;
+}
+
 async function dashboard(client, query = '') {
   const { response, text } = await client.page(`/${query}`);
   assert.equal(response.status, 200, `dashboard status for ${query}`);
@@ -350,6 +363,36 @@ test('a rejected issue keeps what was typed', async () => {
   assert.match(text, /Choose at least one department/);
   assert.match(text, /Projector flickers during worship/);
   assert.match(text, /value="Sam"/);
+});
+
+test('the name field reads as the submitter, not the issue title', async () => {
+  const { text } = await admin.page('/issues/new');
+  assert.match(text, /<label for="poster_name">Your name<\/label>/);
+  assert.match(text, /id="poster_name_hint">Who is logging this\./);
+  assert.match(text, /data-command="underline"/);
+});
+
+test('editor formatting survives saving, and edits show who submitted', async () => {
+  const response = await admin.postMultipart('/issues', {
+    poster_name: 'Jo',
+    status: 'pending',
+    department_ids: String(departmentId('Audio')),
+    issue_html: '<p><u>Hum</u> on <a href="https://example.com/a" style="color:red">channel 4</a></p><ul><li>Checked</li><ul><li>Nested</li></ul></ul>',
+    resolution_html: ''
+  });
+  assert.equal(response.status, 302);
+
+  const database = liveDb();
+  const id = database.prepare('SELECT id FROM issues ORDER BY id DESC').get().id;
+  database.close();
+
+  const { text } = await admin.page(`/issues/${id}/edit`);
+  assert.match(text, /<label for="poster_name">Submitted by<\/label>/);
+  assert.match(text, /<u>Hum<\/u>/);
+  assert.match(text, /<a href="https:\/\/example.com\/a" rel="noopener noreferrer" target="_blank">channel 4<\/a>/);
+  assert.match(text, /<ul><li>Checked<\/li><ul><li>Nested<\/li><\/ul><\/ul>/);
+
+  await admin.post(`/issues/${id}/delete`, {});
 });
 
 test('an oversized pasted image keeps the form instead of losing it', async () => {
@@ -514,7 +557,6 @@ test('library uploads take a title per file and tidy file names otherwise', asyn
 });
 
 test('the library refuses file types it cannot safely serve', async () => {
-  const before = fs.readdirSync(path.join(dataDir, 'uploads', 'library')).length;
   const response = await admin.postMultipart(
     '/library',
     {},
@@ -528,7 +570,7 @@ test('the library refuses file types it cannot safely serve', async () => {
   const { text } = await admin.page('/library');
   assert.match(text, /page\.html is not an allowed file type/);
   assert.equal(libraryRows().length, 3);
-  assert.equal(fs.readdirSync(path.join(dataDir, 'uploads', 'library')).length, before);
+  assert.deepEqual(await libraryFilesOnDisk(), libraryRows().map((row) => row.filename).sort());
 });
 
 test('library files can be edited, replaced, and deleted', async () => {

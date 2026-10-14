@@ -19,17 +19,20 @@
 
   <div class="form-error" role="alert" data-form-error hidden></div>
 
-  <div class="field">
-    <label for="poster_name">Name</label>
-    <input id="poster_name" name="poster_name" type="text" value="<%= issue.poster_name || '' %>" maxlength="120" autocomplete="name" required>
-  </div>
+  <div class="field-row">
+    <div class="field">
+      <label for="poster_name"><%= mode === 'create' ? 'Your name' : 'Submitted by' %></label>
+      <input id="poster_name" name="poster_name" type="text" value="<%= issue.poster_name || '' %>" maxlength="120" autocomplete="name" placeholder="e.g. Sam Jones" aria-describedby="poster_name_hint" required>
+      <p class="field-hint" id="poster_name_hint"><%= mode === 'create' ? 'Who is logging this. Describe the problem in the Issue box below.' : 'The person who logged this issue.' %></p>
+    </div>
 
-  <div class="field">
-    <label for="status">Status</label>
-    <select id="status" name="status" required>
-      <option value="pending" <%= (issue.status || 'pending') === 'pending' ? 'selected' : '' %>>Pending</option>
-      <option value="resolved" <%= issue.status === 'resolved' ? 'selected' : '' %>>Resolved</option>
-    </select>
+    <div class="field">
+      <label for="status">Status</label>
+      <select id="status" name="status" required>
+        <option value="pending" <%= (issue.status || 'pending') === 'pending' ? 'selected' : '' %>>Pending</option>
+        <option value="resolved" <%= issue.status === 'resolved' ? 'selected' : '' %>>Resolved</option>
+      </select>
+    </div>
   </div>
 
   <fieldset class="checkbox-panel" data-department-group>

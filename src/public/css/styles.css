@@ -527,6 +527,52 @@ select:focus,
   gap: 8px;
 }
 
+/* Quick department filters under the search bar: one tap shows only that department's issues. */
+.department-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.department-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 6px 13px;
+  border: 1px solid color-mix(in srgb, var(--warm) 48%, transparent);
+  border-radius: 999px;
+  color: var(--warm);
+  background: transparent;
+  font-size: 0.88rem;
+  font-weight: 850;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    transform 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.department-button:hover {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--warm) 10%, transparent);
+}
+
+.department-button[aria-current="page"] {
+  border-color: var(--warm);
+  color: var(--accent-ink);
+  background: var(--warm);
+}
+
+.department-count {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  font-size: 0.74rem;
+}
+
 .issue-list {
   display: grid;
   gap: 12px;
@@ -2515,6 +2561,18 @@ body.viewer-open {
   }
 
   .dashboard-filters .search-field label {
+    display: none;
+  }
+
+  /* Department buttons become one swipeable row so they don't push the issues down. */
+  .department-buttons {
+    flex-wrap: nowrap;
+    margin-bottom: 12px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .department-buttons::-webkit-scrollbar {
     display: none;
   }
 

@@ -439,6 +439,16 @@ test('issues save with attachments, and search ignores markup', async () => {
   assert.match(all.text, /<time datetime="[^"]+" data-local-time>/);
   // Image attachments open in the full-screen viewer on phones.
   assert.match(all.text, /class="attachment-chip"[^>]*data-viewer-image>/);
+
+  // Department buttons under the filters show one department's issues, keeping the search.
+  const monitors = departmentId('Audio, Monitors');
+  assert.match(all.text, new RegExp(`class="department-button" href="\\?department=${monitors}"\\s*>\\s*Audio, Monitors\\s*<span class="department-count">1</span>`));
+  assert.match(all.text, /class="department-button" href="\.\/" aria-current="page">All</);
+  const filtered = await dashboard(admin, `?department=${monitors}`);
+  assert.equal(filtered.total, 1);
+  assert.match(filtered.text, new RegExp(`href="\\?department=${monitors}" aria-current="page"`));
+  const searched = await dashboard(admin, `?q=broke&sort=oldest&page=2`);
+  assert.match(searched.text, new RegExp(`href="\\?q=broke&amp;department=${monitors}&amp;sort=oldest"`));
 });
 
 test('saving over someone else\'s newer edit is caught', async () => {

@@ -564,6 +564,11 @@ select:focus,
     border-color 160ms ease;
 }
 
+/* The right padding leaves room for the count; All has none, so it gets even padding. */
+.department-button-all {
+  padding-right: 13px;
+}
+
 .department-button:hover {
   transform: translateY(-1px);
   background: color-mix(in srgb, var(--warm) 10%, transparent);

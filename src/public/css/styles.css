@@ -528,12 +528,18 @@ select:focus,
 }
 
 /* Quick department filters under the search bar: one tap shows only that department's issues.
-   Equal-width columns keep the buttons lined up however many rows they wrap to. */
+   They keep their natural widths while they fit on one row. Once they would wrap, app.js adds
+   is-grid and they become equal-width columns that line up however many rows they take. */
 .department-buttons {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 18px;
+}
+
+.department-buttons.is-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
 }
 
 .department-button {
@@ -2574,13 +2580,17 @@ body.viewer-open {
   }
 
   /* Department buttons become one swipeable row so they don't push the issues down. */
-  .department-buttons {
-    grid-template-columns: none;
-    grid-auto-columns: 160px;
-    grid-auto-flow: column;
+  .department-buttons,
+  .department-buttons.is-grid {
+    display: flex;
+    flex-wrap: nowrap;
     margin-bottom: 12px;
     overflow-x: auto;
     scrollbar-width: none;
+  }
+
+  .department-button {
+    flex: 0 0 160px;
   }
 
   .department-buttons::-webkit-scrollbar {

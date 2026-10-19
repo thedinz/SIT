@@ -527,20 +527,23 @@ select:focus,
   gap: 8px;
 }
 
-/* Quick department filters under the search bar: one tap shows only that department's issues. */
+/* Quick department filters under the search bar: one tap shows only that department's issues.
+   Equal-width columns keep the buttons lined up however many rows they wrap to. */
 .department-buttons {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 8px;
   margin-bottom: 18px;
 }
 
 .department-button {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 7px;
+  min-width: 0;
   min-height: 36px;
-  padding: 6px 13px;
+  padding: 6px 8px 6px 13px;
   border: 1px solid color-mix(in srgb, var(--warm) 48%, transparent);
   border-radius: 999px;
   color: var(--warm);
@@ -566,7 +569,13 @@ select:focus,
   background: var(--warm);
 }
 
+.department-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .department-count {
+  flex: 0 0 auto;
   padding: 1px 7px;
   border-radius: 999px;
   background: color-mix(in srgb, currentColor 16%, transparent);
@@ -2566,7 +2575,9 @@ body.viewer-open {
 
   /* Department buttons become one swipeable row so they don't push the issues down. */
   .department-buttons {
-    flex-wrap: nowrap;
+    grid-template-columns: none;
+    grid-auto-columns: 160px;
+    grid-auto-flow: column;
     margin-bottom: 12px;
     overflow-x: auto;
     scrollbar-width: none;

@@ -51,10 +51,10 @@
 <% if (departments.length > 0) { %>
   <% const activeDepartment = ['', 'all'].includes(String(filters.department)) ? 'all' : String(filters.department); %>
   <nav class="department-buttons" aria-label="Browse by department">
-    <a class="department-button" href="<%= departmentUrl('all') %>" <%- activeDepartment === 'all' ? 'aria-current="page"' : '' %>>All</a>
+    <a class="department-button" href="<%= departmentUrl('all') %>" <%- activeDepartment === 'all' ? 'aria-current="page"' : '' %>><span class="department-name">All</span></a>
     <% departments.forEach((department) => { %>
-      <a class="department-button" href="<%= departmentUrl(department.id) %>" <%- activeDepartment === String(department.id) ? 'aria-current="page"' : '' %>>
-        <%= department.name %>
+      <a class="department-button" href="<%= departmentUrl(department.id) %>" title="<%= department.name %>" <%- activeDepartment === String(department.id) ? 'aria-current="page"' : '' %>>
+        <span class="department-name"><%= department.name %></span>
         <span class="department-count"><%= department.issue_count %></span>
       </a>
     <% }) %>

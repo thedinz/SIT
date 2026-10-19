@@ -443,7 +443,7 @@ test('issues save with attachments, and search ignores markup', async () => {
   // Department buttons under the filters show one department's issues, keeping the search.
   const monitors = departmentId('Audio, Monitors');
   assert.match(all.text, new RegExp(`class="department-button" href="\\?department=${monitors}" title="Audio, Monitors"\\s*>\\s*<span class="department-name">Audio, Monitors</span>\\s*<span class="department-count">1</span>`));
-  assert.match(all.text, /class="department-button" href="\.\/" aria-current="page"><span class="department-name">All</);
+  assert.match(all.text, /class="department-button department-button-all" href="\.\/" aria-current="page"><span class="department-name">All</);
   const filtered = await dashboard(admin, `?department=${monitors}`);
   assert.equal(filtered.total, 1);
   assert.match(filtered.text, new RegExp(`href="\\?department=${monitors}" title="Audio, Monitors" aria-current="page"`));

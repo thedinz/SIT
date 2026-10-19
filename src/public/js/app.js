@@ -949,6 +949,24 @@
     });
   });
 
+  // Department buttons keep their natural widths while they fit on one row, and switch to
+  // equal-width columns once they would wrap, so a second row lines up with the first.
+  const departmentButtons = document.querySelector('[data-department-buttons]');
+  if (departmentButtons) {
+    const fitDepartmentButtons = function () {
+      departmentButtons.classList.remove('is-grid');
+      const buttons = departmentButtons.children;
+      const wraps = buttons.length > 1 && buttons[buttons.length - 1].offsetTop > buttons[0].offsetTop;
+      departmentButtons.classList.toggle('is-grid', wraps);
+    };
+    let fitFrame = 0;
+    fitDepartmentButtons();
+    window.addEventListener('resize', function () {
+      window.cancelAnimationFrame(fitFrame);
+      fitFrame = window.requestAnimationFrame(fitDepartmentButtons);
+    });
+  }
+
   // The floating Upload button on phones opens the upload form and brings it into view.
   const uploadFab = document.querySelector('[data-upload-fab]');
   const uploadPanel = document.getElementById('upload');

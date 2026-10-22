@@ -68,7 +68,7 @@ const BACKUP_FILENAME_PREFIX = 'simple-issue-tracker-backup-';
 const SCHEDULED_BACKUP_CHECK_MS = 60 * 60 * 1000;
 const SCHEDULED_BACKUP_RETENTION = 30;
 const PRE_RESTORE_BACKUP_RETENTION = 5;
-const ASSET_VERSION = '20261014-1';
+const ASSET_VERSION = '20261018-5';
 const THEME_COOKIE = 'sit_theme';
 const DEPARTMENT_SEPARATOR = '\u001f';
 // Settings that belong to this server rather than to the data, so they are never exported or restored.
@@ -1769,22 +1769,26 @@ app.get('/', (req, res) => {
     }));
   const attachmentsByIssue = getAttachmentsForIssues(issues.map((issue) => issue.id));
 
-  const pageUrl = (targetPage) => {
+  const listUrl = (targetDepartment, targetPage) => {
     const query = new URLSearchParams();
     if (q) query.set('q', q);
-    if (department) query.set('department', department);
+    if (targetDepartment && targetDepartment !== 'all') query.set('department', targetDepartment);
     if (sort !== 'newest') query.set('sort', sort);
     if (pageSize !== 10) query.set('pageSize', String(pageSize));
     if (targetPage > 1) query.set('page', String(targetPage));
     const queryString = query.toString();
     return urlFor(req, queryString ? `/?${queryString}` : '/');
   };
+  const pageUrl = (targetPage) => listUrl(department, targetPage);
+  // The department buttons keep the search and sort but go back to page 1.
+  const departmentUrl = (departmentId) => listUrl(String(departmentId), 1);
 
   res.render('dashboard', {
     appName: APP_NAME,
-    departments: getDepartments(),
+    departments: getDepartmentsWithCounts(),
     issues,
     attachmentsByIssue,
+    departmentUrl,
     filters: {
       q,
       department,

@@ -527,6 +527,72 @@ select:focus,
   gap: 8px;
 }
 
+/* Quick department filters under the search bar: one tap shows only that department's issues.
+   They keep their natural widths while they fit on one row. Once they would wrap, app.js adds
+   is-grid and they become equal-width columns that line up however many rows they take. */
+.department-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.department-buttons.is-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+
+.department-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  min-width: 0;
+  min-height: 36px;
+  padding: 6px 8px 6px 13px;
+  border: 1px solid color-mix(in srgb, var(--warm) 48%, transparent);
+  border-radius: 999px;
+  color: var(--warm);
+  background: transparent;
+  font-size: 0.88rem;
+  font-weight: 850;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    transform 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+/* The right padding leaves room for the count; All has none, so it gets even padding. */
+.department-button-all {
+  padding-right: 13px;
+}
+
+.department-button:hover {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--warm) 10%, transparent);
+}
+
+.department-button[aria-current="page"] {
+  border-color: var(--warm);
+  color: var(--accent-ink);
+  background: var(--warm);
+}
+
+.department-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.department-count {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  font-size: 0.74rem;
+}
+
 .issue-list {
   display: grid;
   gap: 12px;
@@ -2515,6 +2581,24 @@ body.viewer-open {
   }
 
   .dashboard-filters .search-field label {
+    display: none;
+  }
+
+  /* Department buttons become one swipeable row so they don't push the issues down. */
+  .department-buttons,
+  .department-buttons.is-grid {
+    display: flex;
+    flex-wrap: nowrap;
+    margin-bottom: 12px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .department-button {
+    flex: 0 0 160px;
+  }
+
+  .department-buttons::-webkit-scrollbar {
     display: none;
   }
 

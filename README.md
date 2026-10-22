@@ -6,9 +6,9 @@ A simple self-hosted issue-and-resolution log for church production teams. It is
 
 - Single shared password, no user accounts
 - Dark theme by default, with a light option
-- Search, department filter, sorting, page-size controls, and pagination
+- Search, department filter, sorting, page-size controls, and pagination, plus a button for each department with its issue count
 - Submitter name, multi-department issue tagging, and pending/resolved status
-- WYSIWYG issue and resolution editors with bold, italic, lists, and links
+- WYSIWYG issue and resolution editors with bold, italic, underline, lists, and links; typing "- " or "1. " starts a list, and text pasted from Word or Google Docs keeps its basic formatting
 - Screenshot/file attachments for images and PDFs; paste a screenshot straight into the editor to attach it
 - Edit conflict detection, and issues can be deleted from the edit page
 - Library for standing team documents (stage plots, input lists, manuals) that are not tied to an issue, with in-browser viewing of Word, Excel, PDF, image, and text files

@@ -612,6 +612,14 @@ select:focus,
   box-shadow: var(--shadow);
 }
 
+.issue-title {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 4px 4px 0;
+  font-size: 1.1rem;
+  overflow-wrap: anywhere;
+}
+
 .date-cell,
 .log-cell {
   min-width: 0;

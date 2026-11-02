@@ -353,6 +353,7 @@ test('phones can install the tracker from the manifest without signing in', asyn
 
 test('a rejected issue keeps what was typed', async () => {
   const response = await admin.postMultipart('/issues', {
+    title: 'Flickering projector',
     poster_name: 'Sam',
     status: 'pending',
     issue_html: '<p>Projector flickers during worship</p>',
@@ -362,6 +363,7 @@ test('a rejected issue keeps what was typed', async () => {
   const text = await response.text();
   assert.match(text, /Choose at least one department/);
   assert.match(text, /Projector flickers during worship/);
+  assert.match(text, /value="Flickering projector"/);
   assert.match(text, /value="Sam"/);
 });
 
@@ -370,10 +372,75 @@ test('the name field reads as the submitter, not the issue title', async () => {
   assert.match(text, /<label for="poster_name">Your name<\/label>/);
   assert.match(text, /id="poster_name_hint">Who is logging this\./);
   assert.match(text, /data-command="underline"/);
+  assert.ok(text.indexOf('name="title"') < text.indexOf('name="poster_name"'), 'the title comes first');
+});
+
+test('new issues need a title, which shows on the dashboard and can be searched', async () => {
+  const fields = {
+    poster_name: 'Sam',
+    status: 'pending',
+    department_ids: String(departmentId('Audio')),
+    issue_html: '<p>Cuts out during the second song</p>',
+    resolution_html: ''
+  };
+  const untitled = await admin.postMultipart('/issues', { ...fields, title: '   ' });
+  assert.equal(untitled.status, 422);
+  const untitledText = await untitled.text();
+  assert.match(untitledText, /Add an issue title before saving/);
+  assert.match(untitledText, /Cuts out during the second song/);
+
+  assert.equal((await admin.postMultipart('/issues', { ...fields, title: 'Left <wireless> mic' })).status, 302);
+  const { text } = await dashboard(admin);
+  assert.match(text, /<h2 class="issue-title">Left &lt;wireless&gt; mic<\/h2>/);
+  assert.equal((await dashboard(admin, '?q=wireless')).total, 1);
+
+  const database = liveDb();
+  const id = database.prepare('SELECT id FROM issues ORDER BY id DESC').get().id;
+  database.close();
+
+  // Once an issue has a title it can't be blanked.
+  const blanked = await admin.postMultipart(`/issues/${id}`, { ...fields, title: '' }, [], `/issues/${id}/edit`);
+  assert.equal(blanked.status, 422);
+  assert.match(await blanked.text(), /Add an issue title before saving/);
+
+  await admin.post(`/issues/${id}/delete`, {}, `/issues/${id}/edit`);
+});
+
+test('older issues without a title can still be edited', async () => {
+  assert.equal((await admin.postMultipart('/issues', {
+    title: 'Soon to be old',
+    poster_name: 'Sam',
+    status: 'pending',
+    department_ids: String(departmentId('Audio')),
+    issue_html: '<p>Logged before titles</p>',
+    resolution_html: ''
+  })).status, 302);
+  const database = new Database(path.join(dataDir, 'db', 'simple_issue_tracker.sqlite'));
+  const id = database.prepare('SELECT id FROM issues ORDER BY id DESC').get().id;
+  database.prepare("UPDATE issues SET title = '' WHERE id = ?").run(id);
+  database.close();
+
+  const { text } = await admin.page(`/issues/${id}/edit`);
+  assert.match(text, /This older issue has no title/);
+  assert.doesNotMatch(text, /name="title"[^>]*required/);
+  assert.doesNotMatch((await dashboard(admin)).text, /class="issue-title"/);
+
+  const saved = await admin.postMultipart(`/issues/${id}`, {
+    title: '',
+    poster_name: 'Sam',
+    status: 'resolved',
+    department_ids: String(departmentId('Audio')),
+    issue_html: '<p>Logged before titles</p>',
+    resolution_html: '<p>Fixed</p>'
+  }, [], `/issues/${id}/edit`);
+  assert.equal(saved.status, 302);
+
+  await admin.post(`/issues/${id}/delete`, {}, `/issues/${id}/edit`);
 });
 
 test('editor formatting survives saving, and edits show who submitted', async () => {
   const response = await admin.postMultipart('/issues', {
+    title: 'Channel 4 hum',
     poster_name: 'Jo',
     status: 'pending',
     department_ids: String(departmentId('Audio')),
@@ -397,6 +464,7 @@ test('editor formatting survives saving, and edits show who submitted', async ()
 
 test('an oversized pasted image keeps the form instead of losing it', async () => {
   const response = await admin.postMultipart('/issues', {
+    title: 'Oversized paste',
     poster_name: 'Sam',
     status: 'pending',
     department_ids: String(departmentId('Audio')),
@@ -416,6 +484,7 @@ test('issues save with attachments, and search ignores markup', async () => {
   const response = await admin.postMultipart(
     '/issues',
     {
+      title: 'Broken mic stand',
       poster_name: 'Alex',
       status: 'pending',
       department_ids: [String(departmentId('Audio, Monitors'))],
@@ -455,6 +524,7 @@ test('saving over someone else\'s newer edit is caught', async () => {
   const { text } = await admin.page(`/issues/${issueId}/edit`);
   const base = text.match(/name="base_updated_at" value="([^"]+)"/)[1];
   const fields = (body) => ({
+    title: 'Broken mic stand',
     poster_name: 'Alex',
     status: 'pending',
     department_ids: String(departmentId('Audio, Monitors')),
@@ -644,6 +714,7 @@ test('restoring a zip saves the current data first and keeps you signed in', asy
   assert.match(text, /Backup restored/);
   assert.ok(backupFiles().some((name) => name.endsWith('-pre-restore.zip')));
   assert.equal((await dashboard(admin, '?q=First')).total, 1);
+  assert.equal((await dashboard(admin, '?q=Broken')).total, 1, 'the title comes back from the backup');
 
   const database = liveDb();
   const attachment = database.prepare('SELECT filename FROM attachments').get();
@@ -671,6 +742,7 @@ test('a hostile backup cannot inject scripts, HTML files, or secrets', async () 
     issues: [{
       id: 1,
       department_id: 1,
+      title: '<script>alert(5)</script>',
       poster_name: 'Mallory',
       status: 'pending',
       issue_html: '<script>alert(1)</script><p>Looks normal</p>',

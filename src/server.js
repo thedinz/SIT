@@ -68,7 +68,7 @@ const BACKUP_FILENAME_PREFIX = 'simple-issue-tracker-backup-';
 const SCHEDULED_BACKUP_CHECK_MS = 60 * 60 * 1000;
 const SCHEDULED_BACKUP_RETENTION = 30;
 const PRE_RESTORE_BACKUP_RETENTION = 5;
-const ASSET_VERSION = '20261018-5';
+const ASSET_VERSION = '20261101-1';
 const THEME_COOKIE = 'sit_theme';
 const DEPARTMENT_SEPARATOR = '\u001f';
 // Settings that belong to this server rather than to the data, so they are never exported or restored.
@@ -744,7 +744,7 @@ function createBackupData(options = {}) {
     settings: exportableSettings(),
     departments: db.prepare('SELECT id, name, created_at, updated_at FROM departments ORDER BY id').all(),
     issues: db.prepare(`
-      SELECT id, department_id, poster_name, status, issue_html, resolution_html, created_at, updated_at
+      SELECT id, department_id, title, poster_name, status, issue_html, resolution_html, created_at, updated_at
       FROM issues
       ORDER BY id
     `).all(),
@@ -998,6 +998,7 @@ function readBackupDatabaseData(databasePath) {
     }
 
     const issueColumns = tableColumns(backupDb, 'issues');
+    const titleSql = issueColumns.has('title') ? 'title' : "'' AS title";
     const posterSql = issueColumns.has('poster_name') ? 'poster_name' : "'' AS poster_name";
     const statusSql = issueColumns.has('status') ? 'status' : "'pending' AS status";
     const attachments = tableExists(backupDb, 'attachments')
@@ -1022,7 +1023,7 @@ function readBackupDatabaseData(databasePath) {
         : [],
       departments: backupDb.prepare('SELECT id, name, created_at, updated_at FROM departments ORDER BY id').all(),
       issues: backupDb.prepare(`
-        SELECT id, department_id, ${posterSql}, ${statusSql}, issue_html, resolution_html, created_at, updated_at
+        SELECT id, department_id, ${titleSql}, ${posterSql}, ${statusSql}, issue_html, resolution_html, created_at, updated_at
         FROM issues
         ORDER BY id
       `).all(),
@@ -1311,8 +1312,8 @@ function restoreBackupData(backup, fileSource = {}) {
       }
 
       const insertIssue = db.prepare(`
-        INSERT INTO issues (id, department_id, poster_name, status, issue_html, resolution_html, search_text, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO issues (id, department_id, title, poster_name, status, issue_html, resolution_html, search_text, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const issue of backup.issues) {
         const issueDepartmentId = restoredDepartmentIds.includes(Number(issue.department_id))
@@ -1323,6 +1324,7 @@ function restoreBackupData(backup, fileSource = {}) {
         insertIssue.run(
           Number(issue.id),
           issueDepartmentId,
+          String(issue.title || '').slice(0, 120),
           String(issue.poster_name || '').slice(0, 120),
           normalizeStatus(issue.status),
           issueHtml,
@@ -1458,6 +1460,7 @@ function issueFromBody(req, base = {}) {
   const body = req.body || {};
   return {
     ...base,
+    title: String(body.title || '').trim().slice(0, 120),
     poster_name: String(body.poster_name || '').trim().slice(0, 120),
     status: normalizeStatus(body.status),
     department_ids: validDepartmentIds(selectedIdsFrom(body.department_ids)),
@@ -1482,6 +1485,7 @@ function rerenderIssueForm(req, res, { issue, message, status = 422 }) {
     mode: isEdit ? 'edit' : 'create',
     action: isEdit ? `/issues/${issue.id}` : '/issues',
     issue,
+    titleRequired: titleIsRequired(isEdit ? getIssue(issue.id) : null),
     attachments: isEdit ? getAttachments(issue.id) : [],
     departments: getDepartments()
   });
@@ -1509,7 +1513,15 @@ function issueUploadError(req, res, message) {
   });
 }
 
-function issueValidationError(issue) {
+// Issues from before titles existed stay editable, so filling in a resolution doesn't demand one.
+function titleIsRequired(existingIssue) {
+  return !existingIssue || Boolean(existingIssue.title);
+}
+
+function issueValidationError(issue, existingIssue = null) {
+  if (!issue.title && titleIsRequired(existingIssue)) {
+    return 'Add an issue title before saving.';
+  }
   if (!issue.poster_name) {
     return 'Add your name before saving.';
   }
@@ -1717,6 +1729,7 @@ app.get('/', (req, res) => {
     const pattern = likePattern(q);
     where.push(`(
       i.search_text LIKE ? ESCAPE '\\'
+      OR i.title LIKE ? ESCAPE '\\'
       OR i.poster_name LIKE ? ESCAPE '\\'
       OR EXISTS (
         SELECT 1
@@ -1725,7 +1738,7 @@ app.get('/', (req, res) => {
         WHERE sidp.issue_id = i.id AND sd.name LIKE ? ESCAPE '\\'
       )
     )`);
-    params.push(pattern, pattern, pattern);
+    params.push(pattern, pattern, pattern, pattern);
   }
 
   if (department && department !== 'all') {
@@ -2114,12 +2127,14 @@ app.get('/issues/new', (_req, res) => {
     mode: 'create',
     action: '/issues',
     issue: {
+      title: '',
       poster_name: '',
       status: 'pending',
       department_ids: [],
       issue_html: '',
       resolution_html: ''
     },
+    titleRequired: true,
     attachments: [],
     departments: getDepartments()
   });
@@ -2141,11 +2156,12 @@ app.post(
     const createIssue = db.transaction(() => {
       const result = db
         .prepare(`
-          INSERT INTO issues (department_id, poster_name, status, issue_html, resolution_html, search_text, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO issues (department_id, title, poster_name, status, issue_html, resolution_html, search_text, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
         .run(
           issue.department_ids[0],
+          issue.title,
           issue.poster_name,
           issue.status,
           issue.issue_html,
@@ -2179,6 +2195,7 @@ app.get('/issues/:id/edit', (req, res) => {
     mode: 'edit',
     action: `/issues/${issue.id}`,
     issue,
+    titleRequired: titleIsRequired(issue),
     attachments: getAttachments(issue.id),
     departments: getDepartments()
   });
@@ -2217,7 +2234,7 @@ app.post(
       return;
     }
 
-    const validationError = issueValidationError(issue);
+    const validationError = issueValidationError(issue, existingIssue);
     if (validationError) {
       rerenderIssueForm(req, res, { issue, message: validationError });
       return;
@@ -2227,10 +2244,11 @@ app.post(
     const updateIssue = db.transaction(() => {
       db.prepare(`
         UPDATE issues
-        SET department_id = ?, poster_name = ?, status = ?, issue_html = ?, resolution_html = ?, search_text = ?, updated_at = ?
+        SET department_id = ?, title = ?, poster_name = ?, status = ?, issue_html = ?, resolution_html = ?, search_text = ?, updated_at = ?
         WHERE id = ?
       `).run(
         issue.department_ids[0],
+        issue.title,
         issue.poster_name,
         issue.status,
         issue.issue_html,

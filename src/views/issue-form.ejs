@@ -19,11 +19,19 @@
 
   <div class="form-error" role="alert" data-form-error hidden></div>
 
+  <div class="field">
+    <label for="title">Issue title</label>
+    <input id="title" name="title" type="text" value="<%= issue.title || '' %>" maxlength="120" autocomplete="off" placeholder="e.g. Left wireless mic cuts out" <%- titleRequired ? 'required' : 'aria-describedby="title_hint"' %>>
+    <% if (!titleRequired) { %>
+      <p class="field-hint" id="title_hint">This older issue has no title. Add one if you can.</p>
+    <% } %>
+  </div>
+
   <div class="field-row">
     <div class="field">
       <label for="poster_name"><%= mode === 'create' ? 'Your name' : 'Submitted by' %></label>
       <input id="poster_name" name="poster_name" type="text" value="<%= issue.poster_name || '' %>" maxlength="120" autocomplete="name" placeholder="e.g. Sam Jones" aria-describedby="poster_name_hint" required>
-      <p class="field-hint" id="poster_name_hint"><%= mode === 'create' ? 'Who is logging this. Describe the problem in the Issue box below.' : 'The person who logged this issue.' %></p>
+      <p class="field-hint" id="poster_name_hint"><%= mode === 'create' ? 'Who is logging this.' : 'The person who logged this issue.' %></p>
     </div>
 
     <div class="field">

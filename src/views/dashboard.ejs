@@ -73,6 +73,9 @@
       const attachments = attachmentsByIssue.get(issue.id) || [];
     %>
       <article class="issue-card">
+        <% if (issue.title) { %>
+          <h2 class="issue-title"><%= issue.title %></h2>
+        <% } %>
         <section class="date-cell">
           <span class="status-pill status-<%= issue.status === 'resolved' ? 'resolved' : 'pending' %>"><%= issue.status === 'resolved' ? 'Resolved' : 'Pending' %></span>
           <span class="date-text"><%- localTime(issue.created_at) %></span>

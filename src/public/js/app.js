@@ -544,6 +544,12 @@
 
   // Checks the form before it is sent, so nothing typed is lost to a server-side rejection.
   function validateIssueForm(form) {
+    const title = form.querySelector('[name="title"]');
+    if (title && title.required && !title.value.trim()) {
+      title.focus();
+      return 'Add an issue title before saving.';
+    }
+
     const name = form.querySelector('[name="poster_name"]');
     if (name && !name.value.trim()) {
       name.focus();

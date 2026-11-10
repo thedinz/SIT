@@ -29,6 +29,7 @@
         <nav class="nav-links" aria-label="Primary navigation">
           <a class="<%= currentPath === '/' ? 'active' : '' %>" href="<%= urlFor('/') %>">Dashboard</a>
           <a class="<%= currentPath === '/issues/new' ? 'active' : '' %>" href="<%= urlFor('/issues/new') %>">Add Issue</a>
+          <a class="<%= currentPath === '/howtos' || currentPath.startsWith('/howtos/') ? 'active' : '' %>" href="<%= urlFor('/howtos') %>" <%- currentPath === '/howtos' ? 'aria-current="page"' : '' %>>How-tos</a>
           <a class="<%= currentPath === '/library' || currentPath.startsWith('/library/') ? 'active' : '' %>" href="<%= urlFor('/library') %>" <%- currentPath === '/library' ? 'aria-current="page"' : '' %>>Library</a>
           <a class="<%= currentPath === '/settings' ? 'active' : '' %>" href="<%= urlFor('/settings') %>">Settings</a>
           <button class="theme-toggle" type="button" data-theme-toggle aria-label="Toggle theme">Theme</button>
@@ -40,6 +41,7 @@
       </header>
       <% const tabs = [
         { href: '/', label: 'Dashboard', icon: 'home', active: currentPath === '/' },
+        { href: '/howtos', label: 'How-tos', icon: 'book', active: currentPath === '/howtos' || currentPath.startsWith('/howtos/') },
         { href: '/library', label: 'Library', icon: 'folder', active: currentPath === '/library' || currentPath.startsWith('/library/') },
         { href: '/issues/new', label: 'Add Issue', icon: 'plus', active: currentPath === '/issues/new' },
         { href: '/settings', label: 'Settings', icon: 'gear', active: currentPath === '/settings' }

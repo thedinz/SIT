@@ -40,6 +40,7 @@ const {
   titleFromFilename,
   buildPreview
 } = require('./library');
+const howtos = require('./howtos');
 const packageInfo = require('../package.json');
 
 const app = express();
@@ -51,6 +52,7 @@ const APP_COMMIT = process.env.APP_COMMIT || process.env.SIT_COMMIT || '';
 const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 const MAX_ATTACHMENT_FILES = 12;
 const MAX_FIELD_SIZE = 2 * 1024 * 1024;
+const MAX_HOWTO_FILES = 60;
 const MAX_LIBRARY_FILE_SIZE = 50 * 1024 * 1024;
 const MAX_LIBRARY_FILES = 20;
 const LIBRARY_DIRNAME = path.basename(LIBRARY_DIR);
@@ -68,7 +70,7 @@ const BACKUP_FILENAME_PREFIX = 'simple-issue-tracker-backup-';
 const SCHEDULED_BACKUP_CHECK_MS = 60 * 60 * 1000;
 const SCHEDULED_BACKUP_RETENTION = 30;
 const PRE_RESTORE_BACKUP_RETENTION = 5;
-const ASSET_VERSION = '20261101-1';
+const ASSET_VERSION = '20261110-1';
 const THEME_COOKIE = 'sit_theme';
 const DEPARTMENT_SEPARATOR = '\u001f';
 // Settings that belong to this server rather than to the data, so they are never exported or restored.
@@ -79,6 +81,8 @@ const MULTIPART_ROUTES = [
   /^\/issues\/\d+$/,
   /^\/library$/,
   /^\/library\/\d+$/,
+  /^\/howtos$/,
+  /^\/howtos\/\d+$/,
   /^\/settings\/logo$/,
   /^\/settings\/import$/
 ];
@@ -266,6 +270,23 @@ const logoUpload = multer({
   storage: createStorage(LOGO_DIR, allowedLogoTypes),
   fileFilter: fileFilterFor(allowedLogoTypes),
   limits: { fileSize: MAX_LOGO_SIZE, files: 1 }
+});
+
+// How-to screenshots live beside issue attachments in uploads/, so backups and volumes already cover them.
+const howtoUpload = multer({
+  storage: createStorage(UPLOAD_DIR, allowedLogoTypes),
+  fileFilter: (_req, file, cb) => {
+    if (!howtos.STEP_FILE_FIELD.test(file.fieldname)) {
+      cb(new Error('That upload was not expected.'));
+      return;
+    }
+    if (!extensionForUpload(file, allowedLogoTypes)) {
+      cb(new Error('Screenshots must be jpg, png, gif, or webp images.'));
+      return;
+    }
+    cb(null, true);
+  },
+  limits: { fileSize: MAX_ATTACHMENT_SIZE, files: MAX_HOWTO_FILES, fieldSize: MAX_FIELD_SIZE }
 });
 
 const libraryUpload = multer({
@@ -726,6 +747,14 @@ function createBackupData(options = {}) {
       : { ...file }
   ));
 
+  const howtoRecords = howtos.exportHowtoRecords();
+  if (includeFileData) {
+    howtoRecords.howto_images = howtoRecords.howto_images.map((image) => ({
+      ...image,
+      data_base64: readFileBase64IfExists(UPLOAD_DIR, image.filename)
+    }));
+  }
+
   const logoFilename = getSetting('logo_filename');
   const logos = logoFilename
     ? [{
@@ -755,6 +784,7 @@ function createBackupData(options = {}) {
     `).all(),
     attachments,
     library_files: libraryFiles,
+    ...howtoRecords,
     logos
   };
 }
@@ -882,7 +912,7 @@ async function createFullBackupArchive(destinationPath) {
         branch: APP_BRANCH,
         commit: APP_COMMIT
       },
-      includes: ['database', 'settings', 'departments', 'issues', 'attachments', 'uploads', 'library', 'logo']
+      includes: ['database', 'settings', 'departments', 'issues', 'attachments', 'howtos', 'uploads', 'library', 'logo']
     };
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
     fs.writeFileSync(recordsPath, JSON.stringify(createBackupData({ includeFileData: false }), null, 2));
@@ -1030,6 +1060,7 @@ function readBackupDatabaseData(databasePath) {
       issue_departments: issueDepartments,
       attachments,
       library_files: libraryFiles,
+      ...howtos.exportHowtoRecords(backupDb),
       logos: []
     };
   } finally {
@@ -1238,7 +1269,9 @@ function restoreBackupData(backup, fileSource = {}) {
 
   try {
     if (!fileSource.uploadDir) {
-      writeBackupFilesTo(tmpUploadDir, backup.attachments || []);
+      const howtoImages = (Array.isArray(backup.howto_images) ? backup.howto_images : [])
+        .filter((image) => image && howtos.howtoImageMimeType(image.filename));
+      writeBackupFilesTo(tmpUploadDir, [...(backup.attachments || []), ...howtoImages]);
     }
     if (!fileSource.libraryDir) {
       writeBackupFilesTo(tmpLibraryDir, (backup.library_files || []).filter((file) => libraryTypeFor(file.filename)));
@@ -1260,6 +1293,7 @@ function restoreBackupData(backup, fileSource = {}) {
 
       db.prepare('DELETE FROM attachments').run();
       db.prepare('DELETE FROM library_files').run();
+      howtos.clearHowtos();
       db.prepare('DELETE FROM issue_departments').run();
       db.prepare('DELETE FROM issues').run();
       db.prepare('DELETE FROM departments').run();
@@ -1393,6 +1427,8 @@ function restoreBackupData(backup, fileSource = {}) {
           file.updated_at || file.created_at || nowIso()
         );
       }
+
+      howtos.restoreHowtoRecords(backup, restoredDepartmentIds);
     });
 
     restore();
@@ -2286,9 +2322,182 @@ app.post('/issues/:id/delete', (req, res) => {
   redirectTo(req, res, '/');
 });
 
+function howtoDepartmentIds(values) {
+  return validDepartmentIds(selectedIdsFrom(values));
+}
+
+function renderHowtoForm(res, { howto, mode }) {
+  res.render('howto-form', {
+    title: mode === 'edit' ? 'Edit How-to' : 'New How-to',
+    mode,
+    action: mode === 'edit' ? `/howtos/${howto.id}` : '/howtos',
+    howto,
+    departments: getDepartments(),
+    maxFiles: MAX_HOWTO_FILES,
+    maxFileSize: MAX_ATTACHMENT_SIZE,
+    maxSteps: howtos.MAX_HOWTO_STEPS
+  });
+}
+
+// Shows the form again with what was typed; new screenshots have to be chosen again.
+function rerenderHowtoForm(req, res, { howto, message, status = 422 }) {
+  const hadFiles = Boolean(req.files && req.files.length > 0);
+  removeUploadedFiles(req.files);
+  res.status(status);
+  res.locals.flash = {
+    type: 'error',
+    message: hadFiles ? `${message} Your text was kept, but add any new screenshots again before saving.` : message,
+    sticky: true
+  };
+  renderHowtoForm(res, { howto: howtos.howtoForForm(howto), mode: howto.id ? 'edit' : 'create' });
+}
+
+function howtoUploadError(req, res, message) {
+  const existing = req.params.id ? howtos.getHowto(Number(req.params.id)) : null;
+  if (req.params.id && !existing) {
+    setFlash(req, 'error', 'That how-to could not be found.');
+    redirectTo(req, res, '/howtos');
+    return;
+  }
+  const howto = howtos.howtoFromForm(req.body, [], existing, howtoDepartmentIds);
+  if (existing) {
+    howto.updated_at = String((req.body && req.body.base_updated_at) || existing.updated_at);
+  }
+  rerenderHowtoForm(req, res, { howto, message });
+}
+
+function howtoUploadMiddleware() {
+  return uploadMiddleware(howtoUpload.any(), '10 MB', howtoUploadError, MAX_HOWTO_FILES);
+}
+
+app.get('/howtos', (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const departmentId = req.query.department === 'all' ? 0 : safePositiveInt(req.query.department, 0);
+  const sort = req.query.sort === 'updated' ? 'updated' : 'title';
+  const list = howtos.listHowtos({ pattern: q ? likePattern(q) : '', departmentId, sort });
+
+  // The department buttons keep the search and sort.
+  const departmentUrl = (targetDepartment) => {
+    const query = new URLSearchParams();
+    if (q) query.set('q', q);
+    if (targetDepartment && targetDepartment !== 'all') query.set('department', String(targetDepartment));
+    if (sort !== 'title') query.set('sort', sort);
+    const queryString = query.toString();
+    return urlFor(req, queryString ? `/howtos?${queryString}` : '/howtos');
+  };
+
+  res.render('howtos', {
+    title: 'How-tos',
+    howtos: list,
+    departments: howtos.getDepartmentsWithHowtoCounts(),
+    departmentUrl,
+    totalCount: howtos.countHowtos(),
+    filters: { q, department: departmentId ? String(departmentId) : 'all', sort }
+  });
+});
+
+app.get('/howtos/new', (_req, res) => {
+  renderHowtoForm(res, {
+    mode: 'create',
+    howto: {
+      title: '',
+      author_name: '',
+      needs_update: 0,
+      department_ids: [],
+      intro_html: '',
+      steps: [{ key: 'n1', id: null, heading: '', body_html: '', images: [] }]
+    }
+  });
+});
+
+app.post('/howtos', howtoUploadMiddleware(), requireCsrf, (req, res) => {
+  const howto = howtos.howtoFromForm(req.body, req.files, null, howtoDepartmentIds);
+  const validationError = howtos.howtoValidationError(howto);
+  if (validationError) {
+    rerenderHowtoForm(req, res, { howto, message: validationError });
+    return;
+  }
+
+  removeUploadedFiles(howto.unusedFiles);
+  const { id } = howtos.saveHowto(howto);
+  setFlash(req, 'success', 'How-to added.');
+  redirectTo(req, res, `/howtos/${id}`);
+});
+
+app.get('/howtos/:id(\\d+)', (req, res) => {
+  const howto = howtos.getHowto(Number(req.params.id));
+  if (!howto) {
+    setFlash(req, 'error', 'That how-to could not be found.');
+    redirectTo(req, res, '/howtos');
+    return;
+  }
+  res.render('howto-view', { title: howto.title, howto });
+});
+
+app.get('/howtos/:id(\\d+)/edit', (req, res) => {
+  const howto = howtos.getHowto(Number(req.params.id));
+  if (!howto) {
+    setFlash(req, 'error', 'That how-to could not be found.');
+    redirectTo(req, res, '/howtos');
+    return;
+  }
+  renderHowtoForm(res, { mode: 'edit', howto });
+});
+
+app.post('/howtos/:id(\\d+)', howtoUploadMiddleware(), requireCsrf, (req, res) => {
+  const existing = howtos.getHowto(Number(req.params.id));
+  if (!existing) {
+    removeUploadedFiles(req.files);
+    setFlash(req, 'error', 'That how-to could not be found.');
+    redirectTo(req, res, '/howtos');
+    return;
+  }
+
+  const baseUpdatedAt = String(req.body.base_updated_at || '');
+  const howto = howtos.howtoFromForm(req.body, req.files, existing, howtoDepartmentIds);
+  howto.updated_at = baseUpdatedAt || existing.updated_at;
+
+  if (baseUpdatedAt && baseUpdatedAt !== existing.updated_at) {
+    // Point the form at the latest version so saving again deliberately replaces it.
+    howto.updated_at = existing.updated_at;
+    rerenderHowtoForm(req, res, {
+      howto,
+      status: 409,
+      message: 'Someone else saved this how-to while you were editing. Your version is shown below: save again to replace theirs, or cancel to keep theirs.'
+    });
+    return;
+  }
+
+  const validationError = howtos.howtoValidationError(howto);
+  if (validationError) {
+    rerenderHowtoForm(req, res, { howto, message: validationError });
+    return;
+  }
+
+  removeUploadedFiles(howto.unusedFiles);
+  const { removedFilenames } = howtos.saveHowto(howto);
+  removedFilenames.forEach(removeAttachmentFile);
+  setFlash(req, 'success', 'How-to updated.');
+  redirectTo(req, res, `/howtos/${existing.id}`);
+});
+
+app.post('/howtos/:id(\\d+)/delete', (req, res) => {
+  const howto = howtos.getHowto(Number(req.params.id));
+  if (!howto) {
+    setFlash(req, 'error', 'That how-to could not be found.');
+    redirectTo(req, res, '/howtos');
+    return;
+  }
+
+  howtos.deleteHowto(howto.id).forEach(removeAttachmentFile);
+  setFlash(req, 'success', `${howto.title} was deleted.`);
+  redirectTo(req, res, '/howtos');
+});
+
 app.get('/uploads/:filename', (req, res) => {
   const filename = normalizeFilename(req.params.filename);
-  const attachment = db.prepare('SELECT * FROM attachments WHERE filename = ?').get(filename);
+  const attachment = db.prepare('SELECT * FROM attachments WHERE filename = ?').get(filename)
+    || howtos.getHowtoImageByFilename(filename);
   if (!attachment) {
     res.status(404).send('Not found');
     return;
@@ -2511,6 +2720,11 @@ app.post('/settings/departments/:id/delete', (req, res) => {
   `).get(id, id).count;
   if (used > 0) {
     setFlash(req, 'error', 'That department is used by existing issues, so it cannot be deleted.');
+    redirectTo(req, res, '/settings');
+    return;
+  }
+  if (howtos.howtoDepartmentUseCount(id) > 0) {
+    setFlash(req, 'error', 'That department is used by existing how-tos, so it cannot be deleted.');
     redirectTo(req, res, '/settings');
     return;
   }

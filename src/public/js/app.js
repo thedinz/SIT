@@ -101,6 +101,13 @@
     list.hidden = input.files.length === 0;
   }
 
+  // Pasted screenshots arrive as "image.png" (or nameless), so give them a readable, unique name.
+  function namedScreenshot(file, index) {
+    if (IMAGE_TYPES.indexOf(file.type) === -1 || (file.name && !/^image\.\w+$/i.test(file.name))) return file;
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    return new File([file], 'screenshot-' + stamp + (index ? '-' + index : '') + EXTENSIONS[file.type], { type: file.type });
+  }
+
   // Adds pasted or dropped images to the form's file input, so screenshots are saved as attachments.
   function addFilesToInput(input, files) {
     if (!input || typeof DataTransfer === 'undefined') return 0;
@@ -112,12 +119,7 @@
     let added = 0;
     files.forEach(function (file, index) {
       if (ATTACHMENT_TYPES.indexOf(file.type) === -1) return;
-      let named = file;
-      if (IMAGE_TYPES.indexOf(file.type) !== -1 && (!file.name || /^image\.\w+$/i.test(file.name))) {
-        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-        named = new File([file], 'screenshot-' + stamp + (index ? '-' + index : '') + EXTENSIONS[file.type], { type: file.type });
-      }
-      transfer.items.add(named);
+      transfer.items.add(namedScreenshot(file, index));
       added += 1;
     });
 
@@ -240,12 +242,15 @@
     return 'https://' + url;
   }
 
-  document.querySelectorAll('[data-editor]').forEach(function (editor) {
+  // Editors added later (a new how-to step) are set up by calling this on them.
+  function initEditor(editor) {
     const surface = editor.querySelector('[data-editor-surface]');
     const hidden = editor.querySelector('input[type="hidden"]');
     if (!surface || !hidden) return;
     const form = editor.closest('form');
     const fileInput = form && form.querySelector('[data-attachment-input]');
+    // A how-to step keeps pasted screenshots with the step rather than as form attachments.
+    const step = editor.closest('[data-step]');
     const buttons = Array.from(editor.querySelectorAll('[data-command]'));
     const linkBar = editor.querySelector('[data-editor-linkbar]');
     const linkInput = linkBar && linkBar.querySelector('[data-link-input]');
@@ -316,6 +321,12 @@
 
     function takeFiles(files) {
       if (files.length === 0) return false;
+      if (step && step.addScreenshots) {
+        if (step.addScreenshots(files) === 0) {
+          showFormMessage(form, 'Only images can be added to a step: jpg, png, gif, or webp.');
+        }
+        return true;
+      }
       const added = addFilesToInput(fileInput, files);
       if (added > 0) {
         showFormMessage(form, added === 1
@@ -534,7 +545,9 @@
     });
 
     document.addEventListener('selectionchange', updateToolbar);
-  });
+  }
+
+  document.querySelectorAll('[data-editor]').forEach(initEditor);
 
   document.querySelectorAll('[data-attachment-input]').forEach(function (input) {
     input.addEventListener('change', function () {
@@ -605,6 +618,261 @@
         event.preventDefault();
         showFormMessage(form, problem);
       }
+    });
+  });
+
+  // How-to editor: steps can be added, reordered and removed, and each step holds an ordered
+  // set of screenshots. New screenshots stay in the browser until saving; on submit each step's
+  // order is written as "img:<id>" (saved) and "new:<n>" (the nth file sent for that step).
+  const STEP_IMAGE_TOOLS =
+    '<div class="step-image-tools">' +
+    '<button class="icon-button" type="button" data-image-move="-1" aria-label="Move screenshot earlier" title="Move earlier"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button>' +
+    '<button class="icon-button" type="button" data-image-move="1" aria-label="Move screenshot later" title="Move later"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>' +
+    '<button class="icon-button icon-button-danger" type="button" data-image-remove aria-label="Remove screenshot" title="Remove screenshot"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>' +
+    '</div>';
+
+  document.querySelectorAll('[data-howto-form]').forEach(function (form) {
+    const list = form.querySelector('[data-step-list]');
+    const template = form.querySelector('[data-step-template]');
+    const addButton = form.querySelector('[data-add-step]');
+    const maxFiles = Number(form.getAttribute('data-max-files') || 0);
+    const maxSize = Number(form.getAttribute('data-max-file-size') || 0);
+    const maxSteps = Number(form.getAttribute('data-max-steps') || 0);
+    const pendingFiles = new WeakMap();
+    let nextKey = 1;
+    let dirty = false;
+    let submitting = false;
+
+    function allSteps() {
+      return Array.from(list.children).filter(function (child) { return child.hasAttribute('data-step'); });
+    }
+
+    allSteps().forEach(function (step) {
+      const match = /^n(\d+)$/.exec(step.getAttribute('data-step-key') || '');
+      if (match) nextKey = Math.max(nextKey, Number(match[1]) + 1);
+    });
+
+    function renumber() {
+      const steps = allSteps();
+      steps.forEach(function (step, index) {
+        step.querySelector('[data-step-number]').textContent = 'Step ' + (index + 1);
+        step.querySelector('[data-step-move="-1"]').disabled = index === 0;
+        step.querySelector('[data-step-move="1"]').disabled = index === steps.length - 1;
+      });
+      addButton.disabled = Boolean(maxSteps) && steps.length >= maxSteps;
+    }
+
+    function refreshImageButtons(step) {
+      const items = step.querySelector('[data-step-images]').children;
+      Array.from(items).forEach(function (item, index) {
+        item.querySelector('[data-image-move="-1"]').disabled = index === 0;
+        item.querySelector('[data-image-move="1"]').disabled = index === items.length - 1;
+      });
+    }
+
+    function pendingItem(step, file) {
+      const item = document.createElement('li');
+      item.className = 'step-image step-image-new';
+      item.setAttribute('data-image-token', 'new');
+      const image = document.createElement('img');
+      image.alt = '';
+      image.src = URL.createObjectURL(file);
+      const caption = document.createElement('input');
+      caption.type = 'text';
+      // New captions are sent in screen order, which is also the order their files are sent in.
+      caption.name = 'step_new_caption_' + step.getAttribute('data-step-key');
+      caption.maxLength = 200;
+      caption.placeholder = 'Caption (optional)';
+      caption.setAttribute('aria-label', 'Screenshot caption');
+      item.appendChild(image);
+      item.appendChild(caption);
+      item.insertAdjacentHTML('beforeend', STEP_IMAGE_TOOLS);
+      pendingFiles.set(item, file);
+      return item;
+    }
+
+    function addScreenshots(step, files) {
+      const images = files.filter(function (file) { return IMAGE_TYPES.indexOf(file.type) !== -1; });
+      const target = step.querySelector('[data-step-images]');
+      images.forEach(function (file, index) {
+        target.appendChild(pendingItem(step, namedScreenshot(file, index)));
+      });
+      if (images.length > 0) dirty = true;
+      refreshImageButtons(step);
+      return images.length;
+    }
+
+    function setupStep(step) {
+      step.addScreenshots = function (files) {
+        return addScreenshots(step, files);
+      };
+      const picker = step.querySelector('[data-step-picker]');
+      picker.addEventListener('change', function () {
+        const files = Array.from(picker.files);
+        if (files.length > 0 && addScreenshots(step, files) === 0) {
+          showFormMessage(form, 'Only images can be added to a step: jpg, png, gif, or webp.');
+        }
+        picker.value = '';
+      });
+      refreshImageButtons(step);
+    }
+
+    function forgetImage(item) {
+      const image = item.querySelector('img');
+      if (pendingFiles.has(item) && image) URL.revokeObjectURL(image.src);
+    }
+
+    function stepHasContent(step) {
+      const surface = step.querySelector('[data-editor-surface]');
+      return Boolean(step.querySelector('input[name^="step_heading_"]').value.trim() ||
+        (surface && surface.textContent.trim()) ||
+        step.querySelector('[data-step-images]').children.length);
+    }
+
+    allSteps().forEach(setupStep);
+    renumber();
+
+    addButton.addEventListener('click', function () {
+      const key = 'n' + nextKey;
+      nextKey += 1;
+      const holder = document.createElement('div');
+      holder.innerHTML = template.innerHTML.replace(/__KEY__/g, key).trim();
+      const step = holder.firstElementChild;
+      list.appendChild(step);
+      initEditor(step.querySelector('[data-editor]'));
+      setupStep(step);
+      renumber();
+      step.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      step.querySelector('input[name^="step_heading_"]').focus({ preventScroll: true });
+    });
+
+    list.addEventListener('click', function (event) {
+      const button = event.target.closest('button');
+      if (!button || !list.contains(button)) return;
+      const step = button.closest('[data-step]');
+
+      if (button.hasAttribute('data-step-move')) {
+        const sibling = Number(button.getAttribute('data-step-move')) < 0 ? step.previousElementSibling : step.nextElementSibling;
+        if (!sibling) return;
+        if (sibling === step.previousElementSibling) list.insertBefore(step, sibling);
+        else list.insertBefore(sibling, step);
+        dirty = true;
+        renumber();
+        if (!button.disabled) button.focus();
+        step.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } else if (button.hasAttribute('data-step-remove')) {
+        const number = allSteps().indexOf(step) + 1;
+        if (stepHasContent(step) && !window.confirm('Remove step ' + number + ' and its screenshots? This happens when you save.')) return;
+        step.querySelectorAll('[data-step-images] > li').forEach(forgetImage);
+        step.remove();
+        dirty = true;
+        renumber();
+      } else if (button.hasAttribute('data-image-move')) {
+        const item = button.closest('li');
+        const sibling = Number(button.getAttribute('data-image-move')) < 0 ? item.previousElementSibling : item.nextElementSibling;
+        if (!sibling) return;
+        if (sibling === item.previousElementSibling) item.parentNode.insertBefore(item, sibling);
+        else item.parentNode.insertBefore(sibling, item);
+        dirty = true;
+        refreshImageButtons(step);
+        if (!button.disabled) button.focus();
+      } else if (button.hasAttribute('data-image-remove')) {
+        const item = button.closest('li');
+        forgetImage(item);
+        item.remove();
+        dirty = true;
+        refreshImageButtons(step);
+      }
+    });
+
+    form.addEventListener('input', function () {
+      dirty = true;
+    });
+
+    window.addEventListener('beforeunload', function (event) {
+      if (dirty && !submitting) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    });
+
+    function validate() {
+      const title = form.querySelector('[name="title"]');
+      if (!title.value.trim()) {
+        title.focus();
+        return 'Add a title before saving.';
+      }
+      const author = form.querySelector('[name="author_name"]');
+      if (!author.value.trim()) {
+        author.focus();
+        return 'Add your name before saving.';
+      }
+      const departments = form.querySelectorAll('[name="department_ids"]');
+      if (departments.length > 0 && !Array.from(departments).some(function (box) { return box.checked; })) {
+        departments[0].focus();
+        return 'Choose at least one department before saving.';
+      }
+      const intro = form.querySelector('[data-editor-surface][data-target="intro_html"]');
+      if (!allSteps().some(stepHasContent) && !(intro && intro.textContent.trim())) {
+        return 'Add at least one step before saving.';
+      }
+
+      let count = 0;
+      let tooBig = null;
+      allSteps().forEach(function (step) {
+        step.querySelectorAll('[data-step-images] > li').forEach(function (item) {
+          const file = pendingFiles.get(item);
+          if (!file) return;
+          count += 1;
+          if (maxSize && file.size > maxSize && !tooBig) tooBig = file;
+        });
+      });
+      if (tooBig) return tooBig.name + ' is larger than ' + formatSize(maxSize) + '. Use a smaller screenshot.';
+      if (maxFiles && count > maxFiles) {
+        return 'Add up to ' + maxFiles + ' new screenshots per save. Save now, then edit the guide to add the rest.';
+      }
+      return '';
+    }
+
+    form.addEventListener('submit', function (event) {
+      form.querySelectorAll('[data-editor]').forEach(function (editor) {
+        const surface = editor.querySelector('[data-editor-surface]');
+        const hidden = editor.querySelector('input[type="hidden"]');
+        if (surface && hidden) hidden.value = surface.innerHTML;
+      });
+
+      const problem = validate();
+      if (problem) {
+        event.preventDefault();
+        showFormMessage(form, problem);
+        return;
+      }
+
+      allSteps().forEach(function (step) {
+        const tokens = [];
+        const transfer = typeof DataTransfer === 'undefined' ? null : new DataTransfer();
+        let newIndex = 0;
+        step.querySelectorAll('[data-step-images] > li').forEach(function (item) {
+          const token = item.getAttribute('data-image-token');
+          if (token !== 'new') {
+            tokens.push(token);
+          } else if (transfer) {
+            transfer.items.add(pendingFiles.get(item));
+            tokens.push('new:' + newIndex);
+            newIndex += 1;
+          }
+        });
+        step.querySelector('[data-step-order]').value = tokens.join(',');
+        if (transfer) step.querySelector('[data-step-files]').files = transfer.files;
+      });
+      submitting = true;
+    });
+  });
+
+  // Print a how-to from its page (no inline scripts are allowed).
+  document.querySelectorAll('[data-print-page]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      window.print();
     });
   });
 
@@ -817,7 +1085,7 @@
     function openViewer(link) {
       if (!viewer) buildViewer();
       // Swipe between the other images of the same issue (or the same Library list).
-      const list = link.closest('.files-list, .attachment-strip');
+      const list = link.closest('.files-list, .attachment-strip, [data-viewer-group]');
       group = list ? Array.from(list.querySelectorAll('[data-viewer-image]')) : [link];
       show(group.indexOf(link));
       viewer.hidden = false;
@@ -849,7 +1117,9 @@
 
     viewerLinks.forEach(function (link) {
       link.addEventListener('click', function (event) {
-        if (!touchLayout.matches || event.metaKey || event.ctrlKey || event.shiftKey) return;
+        // How-to screenshots open in the viewer on desktop too, so a guide can be stepped through.
+        const viewerEverywhere = link.hasAttribute('data-viewer-always');
+        if ((!touchLayout.matches && !viewerEverywhere) || event.metaKey || event.ctrlKey || event.shiftKey) return;
         event.preventDefault();
         openViewer(link);
       });

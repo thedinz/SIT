@@ -1,0 +1,67 @@
+<%- include('partials/top', { title: howto.title }) %>
+
+<article class="howto-article">
+  <header class="page-heading howto-heading">
+    <div>
+      <p class="eyebrow">How-to</p>
+      <h1><%= howto.title %></h1>
+      <p class="meta-line">
+        By <%= howto.author_name || 'Unknown' %> · Updated <%- localTime(howto.updated_at) %>
+      </p>
+      <div class="department-stack howto-departments">
+        <% howto.department_list.forEach((departmentName) => { %>
+          <span class="department-pill"><%= departmentName %></span>
+        <% }) %>
+      </div>
+    </div>
+    <div class="howto-actions">
+      <a class="ghost-button compact" href="<%= urlFor('/howtos') %>">Back</a>
+      <button class="secondary-button compact" type="button" data-print-page>Print</button>
+      <a class="primary-button compact" href="<%= urlFor(`/howtos/${howto.id}/edit`) %>">Edit</a>
+    </div>
+  </header>
+
+  <% if (howto.needs_update) { %>
+    <p class="howto-warning" role="note"><strong>Needs updating.</strong> Someone flagged that parts of this guide are out of date. Check each step before relying on it.</p>
+  <% } %>
+
+  <% if (howto.intro_html) { %>
+    <section class="howto-intro rich-text"><%- howto.intro_html %></section>
+  <% } %>
+
+  <% if (howto.steps.length > 0) { %>
+    <ol class="howto-steps" data-viewer-group>
+      <% howto.steps.forEach((step, index) => { %>
+        <li class="howto-step" id="step-<%= index + 1 %>">
+          <div class="howto-step-number" aria-hidden="true"><%= index + 1 %></div>
+          <div class="howto-step-content">
+            <% if (step.heading) { %>
+              <h2 class="howto-step-heading"><span class="visually-hidden">Step <%= index + 1 %>: </span><%= step.heading %></h2>
+            <% } else { %>
+              <h2 class="visually-hidden">Step <%= index + 1 %></h2>
+            <% } %>
+            <% if (step.body_html) { %>
+              <div class="rich-text"><%- step.body_html %></div>
+            <% } %>
+            <% if (step.images.length > 0) { %>
+              <div class="howto-figures">
+                <% step.images.forEach((image, imageIndex) => { %>
+                  <figure class="howto-figure">
+                    <a href="<%= urlFor(`/uploads/${image.filename}`) %>" target="_blank" rel="noopener noreferrer" data-viewer-image data-viewer-always data-viewer-name="<%= `Step ${index + 1}${step.images.length > 1 ? ` · ${imageIndex + 1} of ${step.images.length}` : ''}${image.caption ? ` · ${image.caption}` : ''}` %>">
+                      <img src="<%= urlFor(`/uploads/${image.filename}`) %>" alt="<%= image.caption || `Screenshot for step ${index + 1}` %>" loading="lazy">
+                    </a>
+                    <% if (image.caption) { %>
+                      <figcaption><%= image.caption %></figcaption>
+                    <% } %>
+                  </figure>
+                <% }) %>
+              </div>
+            <% } %>
+          </div>
+        </li>
+      <% }) %>
+    </ol>
+  <% } %>
+</article>
+
+<%- include('partials/bottom') %>

@@ -1,0 +1,94 @@
+<%- include('partials/top', { title }) %>
+
+<section class="page-heading">
+  <div>
+    <p class="eyebrow"><%= mode === 'create' ? 'New guide' : 'Editing guide' %></p>
+    <h1><%= title %></h1>
+    <% if (mode === 'edit') { %>
+      <p class="meta-line">Written <%- localTime(howto.created_at) %> · Updated <%- localTime(howto.updated_at) %></p>
+    <% } %>
+  </div>
+  <a class="ghost-button compact" href="<%= urlFor(mode === 'edit' ? `/howtos/${howto.id}` : '/howtos') %>">Back</a>
+</section>
+
+<form class="form-card stack howto-form" method="post" action="<%= urlFor(action) %>" enctype="multipart/form-data" data-howto-form data-max-files="<%= maxFiles %>" data-max-file-size="<%= maxFileSize %>" data-max-steps="<%= maxSteps %>">
+  <%- include('partials/csrf') %>
+  <% if (mode === 'edit') { %>
+    <input type="hidden" name="base_updated_at" value="<%= howto.updated_at %>">
+  <% } %>
+
+  <div class="form-error" role="alert" data-form-error hidden></div>
+
+  <div class="field">
+    <label for="title">Title</label>
+    <input id="title" name="title" type="text" value="<%= howto.title || '' %>" maxlength="120" autocomplete="off" placeholder="e.g. Starting the Sunday livestream" required>
+  </div>
+
+  <div class="field-row">
+    <div class="field">
+      <label for="author_name"><%= mode === 'create' ? 'Your name' : 'Written by' %></label>
+      <input id="author_name" name="author_name" type="text" value="<%= howto.author_name || '' %>" maxlength="120" autocomplete="name" placeholder="e.g. Sam Jones" required>
+    </div>
+    <div class="field">
+      <span>Status</span>
+      <label class="checkbox-line howto-flag">
+        <input type="checkbox" name="needs_update" value="1" <%= howto.needs_update ? 'checked' : '' %>>
+        Needs updating
+      </label>
+      <p class="field-hint">Tick this when the gear or software has changed and the guide is out of date.</p>
+    </div>
+  </div>
+
+  <fieldset class="checkbox-panel" data-department-group>
+    <legend>Departments</legend>
+    <div class="checkbox-grid">
+      <% departments.forEach((department) => { %>
+        <label class="checkbox-card">
+          <input type="checkbox" name="department_ids" value="<%= department.id %>" <%= (howto.department_ids || []).includes(department.id) ? 'checked' : '' %>>
+          <span><%= department.name %></span>
+        </label>
+      <% }) %>
+    </div>
+  </fieldset>
+
+  <div class="field">
+    <label>Introduction <span class="optional">(optional)</span></label>
+    <%- include('partials/editor', {
+      label: 'Introduction',
+      name: 'intro_html',
+      value: howto.intro_html,
+      placeholder: 'What this guide covers, and anything to check before starting'
+    }) %>
+  </div>
+
+  <section class="step-editor-section" aria-labelledby="steps-title">
+    <div class="step-editor-section-head">
+      <h2 id="steps-title">Steps</h2>
+      <p class="field-hint">Each step keeps its own screenshots, in the order shown. Paste a screenshot into a step's instructions, or use Add screenshots. Images only, up to 10 MB each.</p>
+    </div>
+    <ol class="step-editor-list" data-step-list>
+      <% howto.steps.forEach((step, index) => { %>
+        <%- include('partials/howto-step', { step, number: index + 1 }) %>
+      <% }) %>
+    </ol>
+    <button class="secondary-button step-add" type="button" data-add-step>Add step</button>
+  </section>
+
+  <template data-step-template>
+    <%- include('partials/howto-step', { step: { key: '__KEY__', heading: '', body_html: '', images: [] }, number: 0 }) %>
+  </template>
+
+  <div class="form-actions">
+    <button class="primary-button" type="submit"><%= mode === 'create' ? 'Save How-to' : 'Save Changes' %></button>
+    <a class="ghost-button" href="<%= urlFor(mode === 'edit' ? `/howtos/${howto.id}` : '/howtos') %>">Cancel</a>
+  </div>
+</form>
+
+<% if (mode === 'edit') { %>
+  <form class="danger-zone" method="post" action="<%= urlFor(`/howtos/${howto.id}/delete`) %>" data-confirm="Delete this how-to and all its screenshots? This cannot be undone.">
+    <%- include('partials/csrf') %>
+    <button class="danger-button compact" type="submit">Delete How-to</button>
+  </form>
+<% } %>
+
+<%- include('partials/bottom') %>

@@ -1,0 +1,96 @@
+<%- include('partials/top', { title: 'How-tos' }) %>
+
+<section class="page-heading">
+  <div>
+    <p class="eyebrow phone-hide">Step-by-step guides</p>
+    <h1>How-tos</h1>
+    <p class="meta-line phone-hide">Short or long guides for the production team, with screenshots in the order you need them.</p>
+  </div>
+  <a class="primary-button compact" href="<%= urlFor('/howtos/new') %>">New How-to</a>
+</section>
+
+<% if (totalCount > 0) { %>
+  <form class="control-bar howto-filters" method="get" action="<%= urlFor('/howtos') %>">
+    <div class="field search-field">
+      <label for="q">Search</label>
+      <input id="q" name="q" type="search" value="<%= filters.q %>" placeholder="Search titles, steps, captions, departments" enterkeyhint="search">
+    </div>
+    <div class="field">
+      <label for="department">Department</label>
+      <select id="department" name="department">
+        <option value="all">All Departments</option>
+        <% departments.forEach((department) => { %>
+          <option value="<%= department.id %>" <%= filters.department === String(department.id) ? 'selected' : '' %>><%= department.name %></option>
+        <% }) %>
+      </select>
+    </div>
+    <div class="field">
+      <label for="sort">Sort</label>
+      <select id="sort" name="sort">
+        <option value="title" <%= filters.sort === 'title' ? 'selected' : '' %>>Title A to Z</option>
+        <option value="updated" <%= filters.sort === 'updated' ? 'selected' : '' %>>Recently updated</option>
+      </select>
+    </div>
+    <div class="control-actions">
+      <button class="secondary-button" type="submit">Apply</button>
+      <a class="ghost-button" href="<%= urlFor('/howtos') %>">Clear</a>
+    </div>
+  </form>
+
+  <% if (departments.length > 0) { %>
+    <nav class="department-buttons" aria-label="Browse how-tos by department" data-department-buttons>
+      <a class="department-button department-button-all" href="<%= departmentUrl('all') %>" <%- filters.department === 'all' ? 'aria-current="page"' : '' %>><span class="department-name">All</span></a>
+      <% departments.forEach((department) => { %>
+        <a class="department-button" href="<%= departmentUrl(department.id) %>" title="<%= department.name %>" <%- filters.department === String(department.id) ? 'aria-current="page"' : '' %>>
+          <span class="department-name"><%= department.name %></span>
+          <span class="department-count"><%= department.howto_count %></span>
+        </a>
+      <% }) %>
+    </nav>
+  <% } %>
+<% } %>
+
+<% if (howtos.length === 0) { %>
+  <section class="empty-state">
+    <% if (totalCount === 0) { %>
+      <h2>No how-tos yet</h2>
+      <p>Write up how something is done, one step at a time, and add screenshots to each step.</p>
+      <a class="primary-button compact" href="<%= urlFor('/howtos/new') %>">New How-to</a>
+    <% } else { %>
+      <h2>No how-tos found</h2>
+      <p>Try a different search or department.</p>
+    <% } %>
+  </section>
+<% } else { %>
+  <section class="howto-list" aria-label="How-tos">
+    <% howtos.forEach((howto) => { %>
+      <a class="howto-card" href="<%= urlFor(`/howtos/${howto.id}`) %>">
+        <span class="howto-card-cover" aria-hidden="true">
+          <% if (howto.cover_filename) { %>
+            <img src="<%= urlFor(`/uploads/${howto.cover_filename}`) %>" alt="" loading="lazy">
+          <% } else { %>
+            <svg viewBox="0 0 24 24"><%- include('partials/tab-icon', { name: 'book' }) %></svg>
+          <% } %>
+        </span>
+        <span class="howto-card-body">
+          <span class="howto-card-title"><%= howto.title %></span>
+          <span class="howto-card-meta">
+            <%= howto.step_count %> <%= howto.step_count === 1 ? 'step' : 'steps' %><% if (howto.image_count > 0) { %> · <%= howto.image_count %> <%= howto.image_count === 1 ? 'screenshot' : 'screenshots' %><% } %>
+            · Updated <%- localTime(howto.updated_at) %>
+          </span>
+          <span class="department-stack">
+            <% if (howto.needs_update) { %>
+              <span class="status-pill status-pending">Needs updating</span>
+            <% } %>
+            <% howto.department_list.forEach((departmentName) => { %>
+              <span class="department-pill"><%= departmentName %></span>
+            <% }) %>
+          </span>
+        </span>
+      </a>
+    <% }) %>
+  </section>
+  <p class="howto-count muted"><%= howtos.length %> of <%= totalCount %> <%= totalCount === 1 ? 'how-to' : 'how-tos' %></p>
+<% } %>
+
+<%- include('partials/bottom') %>

@@ -680,6 +680,191 @@ test('library files can be edited, replaced, and deleted', async () => {
   assert.equal((await admin.request(`/library/${libraryIds.pdf}/file`)).status, 404);
 });
 
+let howtoId;
+
+function howtoRows() {
+  const database = liveDb();
+  try {
+    const steps = database.prepare('SELECT * FROM howto_steps WHERE howto_id = ? ORDER BY position, id').all(howtoId);
+    for (const step of steps) {
+      step.images = database.prepare('SELECT * FROM howto_images WHERE step_id = ? ORDER BY position, id').all(step.id);
+    }
+    return steps;
+  } finally {
+    database.close();
+  }
+}
+
+test('how-tos keep their steps and each step\'s screenshots in order', async () => {
+  const response = await admin.postMultipart(
+    '/howtos',
+    {
+      title: 'Start the livestream',
+      author_name: 'Sam',
+      department_ids: [String(departmentId('Audio'))],
+      intro_html: '<p>Check the internet first</p>',
+      step_keys: ['n1', 'n2', 'n3'],
+      step_heading_n1: 'Power on',
+      step_body_n1: '<p>Press the <strong>red</strong> switch</p><script>alert(1)</script>',
+      // The second file chosen goes first, and keeps its own caption.
+      step_order_n1: 'new:1,new:0',
+      step_new_caption_n1: ['Front panel', 'Rear panel'],
+      step_heading_n2: 'Open the encoder',
+      step_body_n2: '<p>Click <em>Start streaming</em></p>',
+      step_order_n2: '',
+      step_heading_n3: '',
+      step_body_n3: '',
+      step_order_n3: ''
+    },
+    [
+      { field: 'step_files_n1', name: 'front.png', type: 'image/png', data: PNG },
+      { field: 'step_files_n1', name: 'rear.png', type: 'image/png', data: PNG }
+    ],
+    '/howtos/new'
+  );
+  assert.equal(response.status, 302);
+  howtoId = Number(response.headers.get('location').match(/howtos\/(\d+)$/)[1]);
+
+  const steps = howtoRows();
+  assert.equal(steps.length, 2, 'the empty third step is dropped');
+  assert.deepEqual(steps.map((step) => step.heading), ['Power on', 'Open the encoder']);
+  assert.deepEqual(steps[0].images.map((image) => [image.original_filename, image.caption]), [
+    ['rear.png', 'Rear panel'],
+    ['front.png', 'Front panel']
+  ]);
+  assert.doesNotMatch(steps[0].body_html, /script/);
+
+  const view = await admin.page(`/howtos/${howtoId}`);
+  assert.equal(view.response.status, 200);
+  assert.ok(view.text.indexOf('Power on') < view.text.indexOf('Open the encoder'));
+  assert.ok(view.text.indexOf(steps[0].images[0].filename) < view.text.indexOf(steps[0].images[1].filename));
+  assert.match(view.text, /<figcaption>Rear panel<\/figcaption>/);
+  assert.match(view.text, /data-viewer-image data-viewer-always/);
+  assert.doesNotMatch(view.text, /<script>alert/);
+
+  const image = await admin.request(`/uploads/${steps[0].images[0].filename}`);
+  assert.equal(image.status, 200);
+  assert.equal(image.headers.get('content-type'), 'image/png');
+
+  const list = await admin.page('/howtos');
+  assert.match(list.text, /Start the livestream/);
+  assert.match(list.text, /2 steps · 2 screenshots/);
+  assert.match(list.text, new RegExp(`href="howtos\\?department=${departmentId('Audio')}" title="Audio"\\s*>\\s*<span class="department-name">Audio</span>\\s*<span class="department-count">1</span>`));
+  assert.match((await admin.page('/howtos?q=red')).text, /Start the livestream/);
+  assert.match((await admin.page('/howtos?q=Rear%20panel')).text, /Start the livestream/);
+  assert.doesNotMatch((await admin.page('/howtos?q=strong')).text, /Start the livestream/);
+  assert.doesNotMatch((await admin.page(`/howtos?department=${departmentId('Audio, Monitors')}`)).text, /Start the livestream/);
+});
+
+test('editing a how-to reorders steps and screenshots and removes what was dropped', async () => {
+  const [first, second] = howtoRows();
+  const [rear, front] = first.images;
+  const { text } = await admin.page(`/howtos/${howtoId}/edit`);
+  const base = text.match(/name="base_updated_at" value="([^"]+)"/)[1];
+  assert.match(text, new RegExp(`name="step_keys" value="s${first.id}"`));
+
+  const response = await admin.postMultipart(
+    `/howtos/${howtoId}`,
+    {
+      base_updated_at: base,
+      title: 'Start the livestream',
+      author_name: 'Sam',
+      needs_update: '1',
+      department_ids: [String(departmentId('Audio'))],
+      intro_html: '<p>Check the internet first</p>',
+      step_keys: [`s${second.id}`, `s${first.id}`, 'n4'],
+      [`step_heading_s${second.id}`]: 'Open the encoder',
+      [`step_body_s${second.id}`]: '<p>Click <em>Start streaming</em></p>',
+      // A saved image can move to another step of the same guide; unknown ids are ignored.
+      [`step_order_s${second.id}`]: `img:${front.id},img:99999`,
+      [`image_caption_${front.id}`]: 'Front panel, moved',
+      [`step_heading_s${first.id}`]: 'Power on',
+      [`step_body_s${first.id}`]: '<p>Press the red switch</p>',
+      [`step_order_s${first.id}`]: '',
+      step_heading_n4: 'Check the stream',
+      step_body_n4: '<p>Watch it on a phone</p>',
+      step_order_n4: 'new:0',
+      step_new_caption_n4: 'Phone view'
+    },
+    [{ field: 'step_files_n4', name: 'phone.png', type: 'image/png', data: PNG }],
+    `/howtos/${howtoId}/edit`
+  );
+  assert.equal(response.status, 302);
+
+  const steps = howtoRows();
+  assert.deepEqual(steps.map((step) => step.heading), ['Open the encoder', 'Power on', 'Check the stream']);
+  assert.deepEqual(steps[0].images.map((image) => [image.id, image.caption]), [[front.id, 'Front panel, moved']]);
+  assert.equal(steps[1].images.length, 0);
+  assert.equal(steps[2].images[0].caption, 'Phone view');
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(!fs.existsSync(path.join(dataDir, 'uploads', rear.filename)), 'the dropped screenshot is deleted');
+  assert.ok(fs.existsSync(path.join(dataDir, 'uploads', front.filename)));
+
+  const view = await admin.page(`/howtos/${howtoId}`);
+  assert.match(view.text, /Needs updating\./);
+  assert.match((await admin.page('/howtos')).text, /status-pending">Needs updating/);
+
+  // Saving over a newer version is caught, as with issues.
+  const stale = await admin.postMultipart(
+    `/howtos/${howtoId}`,
+    { base_updated_at: base, title: 'Old title', author_name: 'Sam', department_ids: [String(departmentId('Audio'))], step_keys: 'n1', step_body_n1: '<p>x</p>' },
+    [],
+    `/howtos/${howtoId}/edit`
+  );
+  assert.equal(stale.status, 409);
+  assert.match(await stale.text(), /Someone else saved this how-to/);
+});
+
+test('a rejected how-to keeps what was typed and refuses non-image files', async () => {
+  const missing = await admin.postMultipart(
+    '/howtos',
+    { title: 'Patch the stage box', author_name: 'Jo', step_keys: 'n1', step_heading_n1: 'Find input 12', step_body_n1: '<p>Left side</p>' },
+    [],
+    '/howtos/new'
+  );
+  assert.equal(missing.status, 422);
+  const text = await missing.text();
+  assert.match(text, /Choose at least one department/);
+  assert.match(text, /value="Patch the stage box"/);
+  assert.match(text, /value="Find input 12"/);
+  assert.match(text, /Left side/);
+
+  const pdf = await admin.postMultipart(
+    '/howtos',
+    { title: 'Patch the stage box', author_name: 'Jo', department_ids: [String(departmentId('Audio'))], step_keys: 'n1', step_body_n1: '<p>Left side</p>' },
+    [{ field: 'step_files_n1', name: 'manual.pdf', type: 'application/pdf', data: Buffer.from('%PDF-1.4') }],
+    '/howtos/new'
+  );
+  assert.equal(pdf.status, 422);
+  assert.match(await pdf.text(), /Screenshots must be jpg, png, gif, or webp images/);
+
+  const database = liveDb();
+  const count = database.prepare('SELECT COUNT(*) AS count FROM howtos').get().count;
+  database.close();
+  assert.equal(count, 1);
+});
+
+test('a department used by a how-to cannot be deleted', async () => {
+  await admin.post('/settings/departments', { name: 'Video Switching' });
+  const id = departmentId('Video Switching');
+  const created = await admin.postMultipart(
+    '/howtos',
+    { title: 'Cut to camera 2', author_name: 'Jo', department_ids: [String(id)], step_keys: 'n1', step_body_n1: '<p>Press PGM 2</p>' },
+    [],
+    '/howtos/new'
+  );
+  assert.equal(created.status, 302);
+  const tempId = Number(created.headers.get('location').match(/howtos\/(\d+)$/)[1]);
+
+  await admin.post(`/settings/departments/${id}/delete`, {});
+  assert.match((await admin.page('/settings')).text, /used by existing how-tos/);
+  assert.equal(departmentId('Video Switching'), id);
+
+  await admin.post(`/howtos/${tempId}/delete`, {}, `/howtos/${tempId}/edit`);
+  assert.equal((await admin.request(`/howtos/${tempId}`)).status, 302);
+  await admin.post(`/settings/departments/${id}/delete`, {});
+});
+
 let backupPath;
 
 test('backups leave out this server\'s session secret', async () => {
@@ -700,6 +885,12 @@ test('backups leave out this server\'s session secret', async () => {
   assert.equal([...entries.keys()].filter((name) => name.startsWith('library/')).length, 2);
   assert.ok(![...entries.keys()].some((name) => name.startsWith('uploads/library')));
   assert.equal(records.library_files.length, 2);
+  assert.equal(records.howtos.length, 1);
+  assert.equal(records.howto_steps.length, 3);
+  assert.equal(records.howto_images.length, 2);
+  for (const image of records.howto_images) {
+    assert.ok(entries.has(`uploads/${image.filename}`), `${image.filename} is in the backup`);
+  }
 });
 
 test('restoring a zip saves the current data first and keeps you signed in', async () => {
@@ -724,6 +915,11 @@ test('restoring a zip saves the current data first and keeps you signed in', asy
   assert.equal(libraryRows().length, 2);
   assert.match((await admin.page(`/library/${libraryIds.docx}`)).text, /Version two/);
   assert.equal((await admin.request(`/library/${libraryIds.xlsx}/file`)).status, 200);
+
+  const steps = howtoRows();
+  assert.deepEqual(steps.map((step) => step.heading), ['Open the encoder', 'Power on', 'Check the stream']);
+  assert.equal((await admin.request(`/uploads/${steps[2].images[0].filename}`)).status, 200);
+  assert.match((await admin.page('/howtos?q=Phone%20view')).text, /Start the livestream/, 'search text is rebuilt');
 });
 
 test('a hostile backup cannot inject scripts, HTML files, or secrets', async () => {
@@ -758,6 +954,16 @@ test('a hostile backup cannot inject scripts, HTML files, or secrets', async () 
       size: 20,
       data_base64: Buffer.from('<script>alert(3)</script>').toString('base64')
     }],
+    howtos: [{ id: 1, title: 'Guide <script>alert(8)</script>', author_name: 'Mallory', intro_html: '<script>alert(6)</script><p>Guide intro</p>' }],
+    howto_departments: [{ howto_id: 1, department_id: 1 }, { howto_id: 2, department_id: 1 }],
+    howto_steps: [
+      { id: 1, howto_id: 1, position: 0, heading: 'Step one', body_html: '<img src=x onerror=alert(7)><p>Do this</p>' },
+      { id: 2, howto_id: 99, position: 0, heading: 'Orphan', body_html: '' }
+    ],
+    howto_images: [
+      { id: 1, step_id: 1, position: 0, filename: 'shot.html', mime_type: 'image/png', data_base64: Buffer.from('<script>alert(9)</script>').toString('base64') },
+      { id: 2, step_id: 1, position: 1, filename: 'ok.png', mime_type: 'text/html', data_base64: PNG.toString('base64') }
+    ],
     logos: [{ filename: 'evil.html', data_base64: Buffer.from('<script>alert(4)</script>').toString('base64') }]
   };
 
@@ -780,6 +986,17 @@ test('a hostile backup cannot inject scripts, HTML files, or secrets', async () 
   assert.equal(upload.headers.get('content-type'), 'application/octet-stream');
   assert.match(upload.headers.get('content-disposition'), /attachment/);
   assert.equal((await admin.request('/logo/evil.html')).status, 404);
+
+  const guide = await admin.page('/howtos/1');
+  assert.match(guide.text, /Guide intro/);
+  assert.match(guide.text, /Do this/);
+  assert.doesNotMatch(guide.text, /<script>alert/);
+  assert.doesNotMatch(guide.text, /onerror/);
+  assert.equal((await admin.request('/howtos/2')).status, 302, 'rows for missing guides are skipped');
+  assert.equal((await admin.request('/uploads/shot.html')).status, 404);
+  assert.ok(!fs.existsSync(path.join(dataDir, 'uploads', 'shot.html')));
+  const okImage = await admin.request('/uploads/ok.png');
+  assert.equal(okImage.headers.get('content-type'), 'image/png', 'the type comes from the file name, not the backup');
 
   // The backup had no library, so the restore empties it.
   assert.equal(libraryRows().length, 0);

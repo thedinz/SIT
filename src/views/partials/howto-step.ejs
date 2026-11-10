@@ -1,0 +1,58 @@
+<li class="step-editor" data-step data-step-key="<%= step.key %>">
+  <input type="hidden" name="step_keys" value="<%= step.key %>">
+  <input type="hidden" name="step_order_<%= step.key %>" value="<%= step.images.map((image) => `img:${image.id}`).join(',') %>" data-step-order>
+  <div class="step-editor-head">
+    <span class="step-editor-number" data-step-number>Step <%= number %></span>
+    <div class="step-editor-tools">
+      <button class="icon-button" type="button" data-step-move="-1" aria-label="Move step up" title="Move step up">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg>
+      </button>
+      <button class="icon-button" type="button" data-step-move="1" aria-label="Move step down" title="Move step down">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <button class="ghost-button compact" type="button" data-step-remove>Remove step</button>
+    </div>
+  </div>
+
+  <div class="field">
+    <label for="step_heading_<%= step.key %>">Heading <span class="optional">(optional)</span></label>
+    <input id="step_heading_<%= step.key %>" name="step_heading_<%= step.key %>" type="text" value="<%= step.heading || '' %>" maxlength="120" autocomplete="off" placeholder="e.g. Turn on the stream encoder">
+  </div>
+
+  <div class="field">
+    <label>Instructions</label>
+    <%- include('editor', {
+      label: 'Step instructions',
+      name: `step_body_${step.key}`,
+      value: step.body_html,
+      placeholder: 'What to do in this step. Paste a screenshot here to add it below.'
+    }) %>
+  </div>
+
+  <div class="step-images">
+    <ol class="step-image-list" data-step-images>
+      <% step.images.forEach((image) => { %>
+        <li class="step-image" data-image-token="img:<%= image.id %>">
+          <img src="<%= urlFor(`/uploads/${image.filename}`) %>" alt="">
+          <input type="text" name="image_caption_<%= image.id %>" value="<%= image.caption || '' %>" maxlength="200" placeholder="Caption (optional)" aria-label="Screenshot caption">
+          <div class="step-image-tools">
+            <button class="icon-button" type="button" data-image-move="-1" aria-label="Move screenshot earlier" title="Move earlier">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg>
+            </button>
+            <button class="icon-button" type="button" data-image-move="1" aria-label="Move screenshot later" title="Move later">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            </button>
+            <button class="icon-button icon-button-danger" type="button" data-image-remove aria-label="Remove screenshot" title="Remove screenshot">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+            </button>
+          </div>
+        </li>
+      <% }) %>
+    </ol>
+    <label class="secondary-button compact step-add-images">
+      Add screenshots
+      <input class="visually-hidden" type="file" multiple accept="image/jpeg,image/png,image/gif,image/webp" data-step-picker>
+    </label>
+    <input type="file" name="step_files_<%= step.key %>" multiple hidden data-step-files>
+  </div>
+</li>
